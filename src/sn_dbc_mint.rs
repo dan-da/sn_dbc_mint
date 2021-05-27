@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
     let peerlist = Arc::new(Mutex::new(PeerList::new()));
     let _rx_thread = handle_qp2p_events(event_rx, peerlist.clone());
 
-    let mut mintinfo: MintInfo = new_mint(1000);
+    let mut mintinfo: MintInfo = new_mint(1000)?;
 
     let mut rl = Editor::<()>::new();
     rl.set_auto_add_history(true);
@@ -174,21 +174,21 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn new_mint(amount: u64) -> MintInfo {
-    let genesis_key = crate::bls_dkg_id(1);
+fn new_mint(amount: u64) -> Result<MintInfo> {
+    let genesis_key = crate::bls_dkg_id(1)?;
     let (mint, dbc) = Mint::genesis(genesis_key.public_key_set.clone(), amount);
-    MintInfo {
+    Ok(MintInfo {
         mint,
         genesis: dbc,
         genesis_key,
-    }
+    })
 }
 
 fn newkey() -> Result<()> {
 
     let (m, n) = loop {
-        let n: usize = readline_prompt("How many key shares (n): ").parse()?;
-        let m: usize = readline_prompt("How many shares needed to sign (m): ").parse()?;
+        let n: usize = readline_prompt("How many key shares (n): ")?.parse()?;
+        let m: usize = readline_prompt("How many shares needed to sign (m): ")?.parse()?;
 
         if m == 0 || n == 0 {
             println!("m and n must be greater than 0\n");
@@ -210,14 +210,14 @@ fn newkey() -> Result<()> {
     // let b = sk_to_bytes(&blspair.secret_key_share);
     // println!("Secret (from bytes): {:?}", sk_from_bytes(b.as_slice()).reveal());
     // let e = encode(&sk_to_bytes(&blspair.secret_key_share));
-    // println!("Secret (decoded):    {:?}", decode(&e).unwrap());
-    // println!("Secret (from dec):   {:?}", sk_from_bytes(&decode(&e).unwrap()).reveal());
+    // println!("Secret (decoded):    {:?}", decode(&e)?;
+    // println!("Secret (from dec):   {:?}", sk_from_bytes(&decode(&e)?.reveal());
 
     println!("\n -- Secret Key Shares --");
     for i in (0..n).into_iter() {
-        println!("{}", encode(&sk_to_bytes(&sks.secret_key_share(i))));
+        println!("{}", encode(&sk_to_bytes(&sks.secret_key_share(i))?));
     }
-    let bytes: Vec<u8> = bincode::serialize(&sks.public_keys()).unwrap();
+    let bytes: Vec<u8> = bincode::serialize(&sks.public_keys())?;
     println!("\n -- Public Key Set --\n{}\n", encode(&bytes));
 
 /*
@@ -225,7 +225,7 @@ fn newkey() -> Result<()> {
         "\nSecret: {}",
         encode(&sk_to_bytes(&blspair.secret_key_share))
     );
-    let bytes: Vec<u8> = bincode::serialize(&blspair.public_key_set).unwrap();
+    let bytes: Vec<u8> = bincode::serialize(&blspair.public_key_set)?();
     println!("Public Set: {}", encode(&bytes));
     println!(
         "Public: {}\n",
@@ -254,9 +254,9 @@ fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
     println!("-- Mint Keys --\n");
     println!(
         "Secret: {}\n",
-        encode(&sk_to_bytes(&mintinfo.genesis_key.secret_key_share))
+        encode(&sk_to_bytes(&mintinfo.genesis_key.secret_key_share)?)
     );
-    let bytes: Vec<u8> = bincode::serialize(&mintinfo.genesis_key.public_key_set).unwrap();
+    let bytes: Vec<u8> = bincode::serialize(&mintinfo.genesis_key.public_key_set)?;
     println!("Public Set: {}\n", encode(&bytes));
     println!(
         "Public ED25519: {}\n\n",
@@ -264,7 +264,7 @@ fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
     );
 
     println!("\n-- Genesis DBC --\n");
-    print_dbc_human(&mintinfo.genesis, true);
+    print_dbc_human(&mintinfo.genesis, true)?;
 
     println!();
 
@@ -278,7 +278,7 @@ fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
     Ok(())
 }
 
-fn print_dbc_human(dbc: &Dbc, outputs: bool) {
+fn print_dbc_human(dbc: &Dbc, outputs: bool) -> Result<()> {
     println!("id: {}\n", encode(dbc.name()));
     println!("amount: {}\n", dbc.content.amount);
     println!("output_number: {}\n", dbc.content.output_number);
@@ -303,24 +303,25 @@ fn print_dbc_human(dbc: &Dbc, outputs: bool) {
     }
 
     println!("\nData:");
-    let bytes = bincode::serialize(&dbc).unwrap();
+    let bytes = bincode::serialize(&dbc)?;
     println!("{}\n", encode(bytes));
+    Ok(())
 }
 
 fn decode_input() -> Result<()> {
-    let t = readline_prompt("\n[d: DBC, t: Transaction, s: SignatureShareMap, r: ReissueRequest\nType: ");
-    let input = readline_prompt("\nPaste Data: ");
-    let bytes = decode(input).unwrap();
+    let t = readline_prompt("\n[d: DBC, t: Transaction, s: SignatureShareMap, r: ReissueRequest\nType: ")?;
+    let input = readline_prompt("\nPaste Data: ")?;
+    let bytes = decode(input)?;
 
     match t.as_str() {
         "d" => { 
             println!("\n\n-- Start DBC --\n");
-            print_dbc_human(&dbc_from_bytes(&bytes), true);
+            print_dbc_human(&dbc_from_bytes(&bytes)?, true)?;
             println!("\n\n-- End DBC --\n");
         },
-        "t" => println!("\n\n-- Transaction -- {:#?}", minttx_from_bytes(&bytes)),
-        "s" => println!("\n\n-- SignatureShareMap -- {:#?}", ssm_from_bytes(&bytes)),
-        "r" => println!("\n\n-- ReissueRequest -- {:#?}", mr_from_bytes(&bytes)),
+        "t" => println!("\n\n-- Transaction -- {:#?}", minttx_from_bytes(&bytes)?),
+        "s" => println!("\n\n-- SignatureShareMap -- {:#?}", ssm_from_bytes(&bytes)?),
+        "r" => println!("\n\n-- ReissueRequest -- {:#?}", mr_from_bytes(&bytes)?),
         _ => println!("Unknown type!"),
     }
     println!();
@@ -408,12 +409,12 @@ fn prepare_tx() -> Result<()> {
 
     let mut inputs_total: u64 = 0;
     loop {
-        let dbc_base64 = readline_prompt("\nInput DBC, or 'done': ");
+        let dbc_base64 = readline_prompt("\nInput DBC, or 'done': ")?;
         let dbc = if dbc_base64 == "done" {
             break;
         } else {
-            let bytes = decode(&dbc_base64).unwrap();
-            dbc_from_bytes(&bytes)
+            let bytes = decode(&dbc_base64)?;
+            dbc_from_bytes(&bytes)?
         };
 
         inputs_total += dbc.content.amount;
@@ -433,27 +434,27 @@ fn prepare_tx() -> Result<()> {
 
         let remaining = inputs_total - outputs_total;
         println!("Inputs total: {}.  Remaining: {}", inputs_total, remaining );
-        let line = readline_prompt("Amount, or 'cancel': ");
+        let line = readline_prompt("Amount, or 'cancel': ")?;
         let amount: u64 = if line == "cancel" {
             println!("\nprepare_tx cancelled\n");
             break;
         } else {
-            line.parse().unwrap()
+            line.parse()?
         };
         if amount > remaining || amount == 0 {
             println!("\nThe amount must be in the range 1..{}\n", remaining);
             continue;
         }
 
-        let line = readline_prompt("\nPublic Key Set, or 'cancel': ");
+        let line = readline_prompt("\nPublic Key Set, or 'cancel': ")?;
         let pub_out = if line == "cancel" {
             break;
         } else {
             line
         };
 
-        let pub_out_bytes = decode(&pub_out).unwrap();
-        let pub_out_set = pks_from_bytes(pub_out_bytes.as_slice());
+        let pub_out_bytes = decode(&pub_out)?;
+        let pub_out_set = pks_from_bytes(pub_out_bytes.as_slice())?;
 
         outputs.insert(
             DbcContent {
@@ -480,7 +481,7 @@ fn prepare_tx() -> Result<()> {
 
     let transaction = MintTransaction { inputs, outputs };
 
-    let bytes = bincode::serialize(&transaction).unwrap();
+    let bytes = bincode::serialize(&transaction)?;
 
     println!("\n-- Transaction (Base64) --");
     println!("{}", encode(&bytes));
@@ -491,8 +492,8 @@ fn prepare_tx() -> Result<()> {
 
 fn sign_tx() -> Result<()> {
 
-    let tx_bytes = decode(readline_prompt("\nTx: ")).unwrap();
-    let tx = minttx_from_bytes(&tx_bytes);
+    let tx_bytes = decode(readline_prompt("\nTx: ")?)?;
+    let tx = minttx_from_bytes(&tx_bytes)?;
 
     let mut inputs: HashMap<Dbc, SecretKeyShare> = Default::default();
 
@@ -501,12 +502,12 @@ fn sign_tx() -> Result<()> {
         println!("Input #{} [id: {}, amount: {}]", i, encode(dbc.name()), dbc.content.amount );
         println!("-----------------");
 
-        let key = readline_prompt("\nSecret Key Share, or 'cancel': ");
+        let key = readline_prompt("\nSecret Key Share, or 'cancel': ")?;
         let secret = if key == "cancel" {
             break;
         } else {
-            let b64 = decode(&key).unwrap();
-            sks_from_bytes(b64.as_slice())
+            let b64 = decode(&key)?;
+            sks_from_bytes(b64.as_slice())?
         };
 
         inputs.insert(dbc.clone(), secret);
@@ -521,7 +522,7 @@ fn sign_tx() -> Result<()> {
     }
 
     println!("\n-- SignatureShareMap (Base64) --");
-    let bytes = bincode::serialize(&sig_shares).unwrap();
+    let bytes = bincode::serialize(&sig_shares)?;
     println!("{}", encode(&bytes));
     println!("-- End SignatureShareMap --\n");
 
@@ -530,8 +531,8 @@ fn sign_tx() -> Result<()> {
 
 fn prepare_reissue() -> Result<()> {
 
-    let tx_bytes = decode(readline_prompt("\nTx: ")).unwrap();
-    let tx = minttx_from_bytes(&tx_bytes);
+    let tx_bytes = decode(readline_prompt("\nTx: ")?)?;
+    let tx = minttx_from_bytes(&tx_bytes)?;
     let mut sig_shares_by_input: HashMap<Hash, BTreeMap<usize, SignatureShare>> = Default::default();
 
     for dbc in tx.inputs.iter() {
@@ -540,13 +541,13 @@ fn prepare_reissue() -> Result<()> {
         println!("-----------------");
 
         for _ in (0..dbc.content.owner.threshold() + 1).into_iter() {
-            let key = readline_prompt("\nSignatureShareMap, or 'cancel': ");
+            let key = readline_prompt("\nSignatureShareMap, or 'cancel': ")?;
             let share_map = if key == "cancel" {
                 println!("\nprepare_reissue cancelled.\n");
                 return Ok(());
             } else {
-                let b64 = decode(&key).unwrap();
-                ssm_from_bytes(b64.as_slice())
+                let b64 = decode(&key)?;
+                ssm_from_bytes(b64.as_slice())?
             };
             for (name, share) in share_map.0.iter() {
                 let list = sig_shares_by_input.entry(*name).or_insert(BTreeMap::default());
@@ -557,7 +558,10 @@ fn prepare_reissue() -> Result<()> {
 
     let mut proofs: HashMap<Hash, Signature> = Default::default();
     for dbc in tx.inputs.iter() {
-        let shares = sig_shares_by_input.get(&dbc.name()).unwrap();
+        let shares = match sig_shares_by_input.get(&dbc.name()) {
+            Some(s) => s,
+            None => return Err(anyhow!("Signature Shares not found for input Dbc {}", encode(&dbc.name()))),
+        };
         let sig = dbc.content.owner.combine_signatures(shares).map_err(|e| Error::msg(format!("{}", e)))?;
         proofs.insert(dbc.name(), sig);
     }
@@ -570,7 +574,7 @@ fn prepare_reissue() -> Result<()> {
     };
 
     println!("\n-- Reissue Request (Base64) --");
-    let bytes = bincode::serialize(&mint_request).unwrap();
+    let bytes = bincode::serialize(&mint_request)?;
     println!("{}", encode(&bytes));
     println!("-- End Reissue Request --\n");
 
@@ -580,8 +584,8 @@ fn prepare_reissue() -> Result<()> {
 
 fn reissue(mint: &mut Mint) -> Result<()> {
 
-    let mr_bytes = decode(readline_prompt("\nReissue Request: ")).unwrap();
-    let mint_request = mr_from_bytes(&mr_bytes);
+    let mr_bytes = decode(readline_prompt("\nReissue Request: ")?)?;
+    let mint_request = mr_from_bytes(&mr_bytes)?;
 
     let input_hashes = BTreeSet::from_iter(mint_request.transaction.inputs.iter().map(|e| e.name()));
 
@@ -611,7 +615,7 @@ fn reissue(mint: &mut Mint) -> Result<()> {
 
     for dbc in output_dbcs.iter() {
         println!("\n-- Begin DBC --");
-        print_dbc_human(dbc, false);
+        print_dbc_human(dbc, false)?;
         println!("-- End DBC --\n");
     }
 
@@ -624,28 +628,28 @@ fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
     let mut inputs: HashMap<Dbc, SecretKeyShare> = Default::default();
 
     loop {
-        let dbc_base64 = readline_prompt("\nInput DBC, or 'done': ");
+        let dbc_base64 = readline_prompt("\nInput DBC, or 'done': ")?;
         let dbc = if dbc_base64 == "done" {
             break;
         } else {
             let bytes = decode(&dbc_base64)?;
-            dbc_from_bytes(&bytes)
+            dbc_from_bytes(&bytes)?
         };
 
-        let key = readline_prompt("\nInput DBC Secret Key, or 'done': ");
+        let key = readline_prompt("\nInput DBC Secret Key, or 'done': ")?;
         let secret = if key == "done" {
             break;
         } else {
             let b64 = decode(&key)?;
-            sks_from_bytes(b64.as_slice())
+            sks_from_bytes(b64.as_slice())?
         };
 
         inputs.insert(dbc, secret);
     }
-    let amounts_input = readline_prompt("\nOutput Amounts: ");
-    let pub_out = readline_prompt("\nOutput Public Key Set: ");
+    let amounts_input = readline_prompt("\nOutput Amounts: ")?;
+    let pub_out = readline_prompt("\nOutput Public Key Set: ")?;
     let pub_out_bytes = decode(&pub_out)?;
-    let pub_out_set = pks_from_bytes(pub_out_bytes.as_slice());
+    let pub_out_set = pks_from_bytes(pub_out_bytes.as_slice())?;
 
     let amounts: Vec<u64> = amounts_input
         .split_whitespace()
@@ -691,7 +695,7 @@ fn reissue_ez_worker(
     let mut proofs: HashMap<Hash, Signature> = Default::default();
     for (dbc, secret) in my_inputs.iter() {
         let sig_share = secret.sign(&transaction.blinded().hash());
-        let sig = dbc.content.owner.combine_signatures(vec![(0, &sig_share)]).unwrap();
+        let sig = dbc.content.owner.combine_signatures(vec![(0, &sig_share)]).map_err(|e| anyhow!("{}", e))?;
         proofs.insert(dbc.name(), sig);
     }
 
@@ -732,7 +736,7 @@ fn reissue_ez_worker(
 
     for dbc in output_dbcs.iter() {
         println!("\n-- Begin DBC --");
-        print_dbc_human(dbc, false);
+        print_dbc_human(dbc, false)?;
         println!("-- End DBC --\n");
     }
 
@@ -743,7 +747,7 @@ fn mk_secret_key_set(threshold: usize) -> SecretKeySet {
     SecretKeySet::random(threshold, &mut rand::thread_rng())
 }
 
-fn bls_dkg_id(num_shares: usize) -> bls_dkg::outcome::Outcome {
+fn bls_dkg_id(num_shares: usize) -> Result<bls_dkg::outcome::Outcome> {
     let owner_names: Vec<xor_name::XorName> = (0..num_shares).into_iter().map(|_| rand::random()).collect();
     let threshold = num_shares - 1;
     let (mut key_gen, proposal) = match bls_dkg::KeyGen::initialize(
@@ -763,59 +767,58 @@ fn bls_dkg_id(num_shares: usize) -> bls_dkg::outcome::Outcome {
         }
     }
 
-    let (_, outcome) = key_gen.generate_keys().unwrap();
-    outcome
+    let result = match key_gen.generate_keys() {
+        Some((_, outcome)) => Ok(outcome),
+        None => Err(anyhow!("Key generation failed")),
+    };
+    result
 }
 
-fn sk_to_bytes(sk: &SecretKeyShare) -> Vec<u8> {
+fn sk_to_bytes(sk: &SecretKeyShare) -> Result<Vec<u8>> {
     use threshold_crypto::serde_impl::SerdeSecret;
-    bincode::serialize(&SerdeSecret(&sk)).unwrap()
+    bincode::serialize(&SerdeSecret(&sk)).map_err(|e| anyhow!("{}", e))
 }
 
-// fn sk_from_bytes(b: &[u8]) -> SecretKey {
-//     bincode::deserialize(&b).unwrap()
-// }
-
-fn sks_from_bytes(b: &[u8]) -> SecretKeyShare {
-    bincode::deserialize(&b).unwrap()
+fn sks_from_bytes(b: &[u8]) -> Result<SecretKeyShare> {
+    bincode::deserialize(&b).map_err(|e| anyhow!("{}", e))
 }
 
-fn pks_from_bytes(b: &[u8]) -> PublicKeySet {
-    bincode::deserialize(&b).unwrap()
+fn pks_from_bytes(b: &[u8]) -> Result<PublicKeySet> {
+    bincode::deserialize(&b).map_err(|e| anyhow!("{}", e))
 }
 
-fn dbc_from_bytes(b: &[u8]) -> Dbc {
-    bincode::deserialize(&b).unwrap()
+fn dbc_from_bytes(b: &[u8]) -> Result<Dbc> {
+    bincode::deserialize(&b).map_err(|e| anyhow!("{}", e))
 }
 
-fn mr_from_bytes(b: &[u8]) -> MintRequest {
-    bincode::deserialize(&b).unwrap()
+fn mr_from_bytes(b: &[u8]) -> Result<MintRequest> {
+    bincode::deserialize(&b).map_err(|e| anyhow!("{}", e))
 }
 
-fn ssm_from_bytes(b: &[u8]) -> SignatureShareMap {
-    bincode::deserialize(&b).unwrap()
+fn ssm_from_bytes(b: &[u8]) -> Result<SignatureShareMap> {
+    bincode::deserialize(&b).map_err(|e| anyhow!("{}", e))
 }
 
 
-fn minttx_from_bytes(b: &[u8]) -> MintTransaction {
-    bincode::deserialize(&b).unwrap()
+fn minttx_from_bytes(b: &[u8]) -> Result<MintTransaction> {
+    bincode::deserialize(&b).map_err(|e| anyhow!("{}", e))
 }
 
 
-fn readline_prompt(prompt: &str) -> String {
+fn readline_prompt(prompt: &str) -> Result<String> {
     loop {
         println!("{}", prompt);
-        let line = readline();
+        let line = readline()?;
         if !line.is_empty() {
-            return line;
+            return Ok(line);
         }
     }
 }
 
-fn readline() -> String {
+fn readline() -> Result<String> {
     let mut line = String::new();
-    std::io::stdin().read_line(&mut line).unwrap(); // including '\n'
-    line.trim().to_string()
+    std::io::stdin().read_line(&mut line)?; // including '\n'
+    Ok(line.trim().to_string())
 }
 
 fn encode<T: AsRef<[u8]>>(data: T) -> String {
