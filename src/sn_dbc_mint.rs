@@ -146,7 +146,7 @@ async fn main() -> Result<()> {
                     "reissue" => reissue(&mut mintinfo.mint),
                     "reissue_ez" => reissue_ez(&mut mintinfo),
                     "newkey" => newkey(),
-                    "decode" => decode(),
+                    "decode" => decode_input(),
                     "send" => on_cmd_send(&mut args, &peerlist, &endpoint).await,
                     "quit" | "exit" => break 'outer,
                     "help" => {
@@ -209,27 +209,27 @@ fn newkey() -> Result<()> {
     // println!("Secret (bytes):      {:?}", sk_to_bytes(&blspair.secret_key_share));
     // let b = sk_to_bytes(&blspair.secret_key_share);
     // println!("Secret (from bytes): {:?}", sk_from_bytes(b.as_slice()).reveal());
-    // let e = base64::encode(&sk_to_bytes(&blspair.secret_key_share));
-    // println!("Secret (decoded):    {:?}", base64::decode(&e).unwrap());
-    // println!("Secret (from dec):   {:?}", sk_from_bytes(&base64::decode(&e).unwrap()).reveal());
+    // let e = encode(&sk_to_bytes(&blspair.secret_key_share));
+    // println!("Secret (decoded):    {:?}", decode(&e).unwrap());
+    // println!("Secret (from dec):   {:?}", sk_from_bytes(&decode(&e).unwrap()).reveal());
 
     println!("\n -- Secret Key Shares --");
     for i in (0..n).into_iter() {
-        println!("{}", base64::encode(&sk_to_bytes(&sks.secret_key_share(i))));
+        println!("{}", encode(&sk_to_bytes(&sks.secret_key_share(i))));
     }
     let bytes: Vec<u8> = bincode::serialize(&sks.public_keys()).unwrap();
-    println!("\n -- Public Key Set --\n{}\n", base64::encode(&bytes));
+    println!("\n -- Public Key Set --\n{}\n", encode(&bytes));
 
 /*
     println!(
         "\nSecret: {}",
-        base64::encode(&sk_to_bytes(&blspair.secret_key_share))
+        encode(&sk_to_bytes(&blspair.secret_key_share))
     );
     let bytes: Vec<u8> = bincode::serialize(&blspair.public_key_set).unwrap();
-    println!("Public Set: {}", base64::encode(&bytes));
+    println!("Public Set: {}", encode(&bytes));
     println!(
         "Public: {}\n",
-        base64::encode(&blspair.public_key_set.public_key().to_bytes())
+        encode(&blspair.public_key_set.public_key().to_bytes())
     );
 */    
 
@@ -254,13 +254,13 @@ fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
     println!("-- Mint Keys --\n");
     println!(
         "Secret: {}\n",
-        base64::encode(&sk_to_bytes(&mintinfo.genesis_key.secret_key_share))
+        encode(&sk_to_bytes(&mintinfo.genesis_key.secret_key_share))
     );
     let bytes: Vec<u8> = bincode::serialize(&mintinfo.genesis_key.public_key_set).unwrap();
-    println!("Public Set: {}\n", base64::encode(&bytes));
+    println!("Public Set: {}\n", encode(&bytes));
     println!(
         "Public ED25519: {}\n\n",
-        base64::encode(&mintinfo.mint.public_key().to_bytes())
+        encode(&mintinfo.mint.public_key().to_bytes())
     );
 
     println!("\n-- Genesis DBC --\n");
@@ -270,7 +270,7 @@ fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
 
     println!("-- SpendBook --\n");
     for (dbchash, _tx) in mintinfo.mint.spendbook.transactions.iter() {
-        println!("  {}", base64::encode(&dbchash));
+        println!("  {}", encode(&dbchash));
     }
 
     println!();
@@ -279,7 +279,7 @@ fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
 }
 
 fn print_dbc_human(dbc: &Dbc, outputs: bool) {
-    println!("id: {}\n", base64::encode(dbc.name()));
+    println!("id: {}\n", encode(dbc.name()));
     println!("amount: {}\n", dbc.content.amount);
     println!("output_number: {}\n", dbc.content.output_number);
 
@@ -287,30 +287,30 @@ fn print_dbc_human(dbc: &Dbc, outputs: bool) {
     // so for now we are just displaying the latter.
     // println!("parents:");
     // for p in &dbc.content.parents {
-    //     println!("  {}", base64::encode(p))
+    //     println!("  {}", encode(p))
     // }
 
     println!("inputs:");
     for i in &dbc.transaction.inputs {
-        println!("  {}", base64::encode(i))
+        println!("  {}", encode(i))
     }
 
     if outputs {
         println!("\noutputs:");
         for i in &dbc.transaction.outputs {
-            println!("  {}", base64::encode(i))
+            println!("  {}", encode(i))
         }
     }
 
     println!("\nData:");
     let bytes = bincode::serialize(&dbc).unwrap();
-    println!("{}\n", base64::encode(bytes));
+    println!("{}\n", encode(bytes));
 }
 
-fn decode() -> Result<()> {
+fn decode_input() -> Result<()> {
     let t = readline_prompt("\n[d: DBC, t: Transaction, s: SignatureShareMap, r: ReissueRequest\nType: ");
     let input = readline_prompt("\nPaste Data: ");
-    let bytes = base64::decode(input).unwrap();
+    let bytes = decode(input).unwrap();
 
     match t.as_str() {
         "d" => { 
@@ -412,7 +412,7 @@ fn prepare_tx() -> Result<()> {
         let dbc = if dbc_base64 == "done" {
             break;
         } else {
-            let bytes = base64::decode(&dbc_base64).unwrap();
+            let bytes = decode(&dbc_base64).unwrap();
             dbc_from_bytes(&bytes)
         };
 
@@ -452,7 +452,7 @@ fn prepare_tx() -> Result<()> {
             line
         };
 
-        let pub_out_bytes = base64::decode(&pub_out).unwrap();
+        let pub_out_bytes = decode(&pub_out).unwrap();
         let pub_out_set = pks_from_bytes(pub_out_bytes.as_slice());
 
         outputs.insert(
@@ -483,7 +483,7 @@ fn prepare_tx() -> Result<()> {
     let bytes = bincode::serialize(&transaction).unwrap();
 
     println!("\n-- Transaction (Base64) --");
-    println!("{}", base64::encode(&bytes));
+    println!("{}", encode(&bytes));
     println!("-- End Transaction --\n");
 
     Ok(())
@@ -491,21 +491,21 @@ fn prepare_tx() -> Result<()> {
 
 fn sign_tx() -> Result<()> {
 
-    let tx_bytes = base64::decode(readline_prompt("\nTx: ")).unwrap();
+    let tx_bytes = decode(readline_prompt("\nTx: ")).unwrap();
     let tx = minttx_from_bytes(&tx_bytes);
 
     let mut inputs: HashMap<Dbc, SecretKeyShare> = Default::default();
 
     for (i, dbc) in tx.inputs.iter().enumerate() {
         println!("-----------------");
-        println!("Input #{} [id: {}, amount: {}]", i, base64::encode(dbc.name()), dbc.content.amount );
+        println!("Input #{} [id: {}, amount: {}]", i, encode(dbc.name()), dbc.content.amount );
         println!("-----------------");
 
         let key = readline_prompt("\nSecret Key Share, or 'cancel': ");
         let secret = if key == "cancel" {
             break;
         } else {
-            let b64 = base64::decode(&key).unwrap();
+            let b64 = decode(&key).unwrap();
             sks_from_bytes(b64.as_slice())
         };
 
@@ -522,7 +522,7 @@ fn sign_tx() -> Result<()> {
 
     println!("\n-- SignatureShareMap (Base64) --");
     let bytes = bincode::serialize(&sig_shares).unwrap();
-    println!("{}", base64::encode(&bytes));
+    println!("{}", encode(&bytes));
     println!("-- End SignatureShareMap --\n");
 
     Ok(())
@@ -530,13 +530,13 @@ fn sign_tx() -> Result<()> {
 
 fn prepare_reissue() -> Result<()> {
 
-    let tx_bytes = base64::decode(readline_prompt("\nTx: ")).unwrap();
+    let tx_bytes = decode(readline_prompt("\nTx: ")).unwrap();
     let tx = minttx_from_bytes(&tx_bytes);
     let mut sig_shares_by_input: HashMap<Hash, BTreeMap<usize, SignatureShare>> = Default::default();
 
     for dbc in tx.inputs.iter() {
         println!("-----------------");
-        println!("Input #{} [id: {}, amount: {}]", dbc.content.output_number, base64::encode(dbc.name()), dbc.content.amount );
+        println!("Input #{} [id: {}, amount: {}]", dbc.content.output_number, encode(dbc.name()), dbc.content.amount );
         println!("-----------------");
 
         for _ in (0..dbc.content.owner.threshold() + 1).into_iter() {
@@ -545,7 +545,7 @@ fn prepare_reissue() -> Result<()> {
                 println!("\nprepare_reissue cancelled.\n");
                 return Ok(());
             } else {
-                let b64 = base64::decode(&key).unwrap();
+                let b64 = decode(&key).unwrap();
                 ssm_from_bytes(b64.as_slice())
             };
             for (name, share) in share_map.0.iter() {
@@ -571,7 +571,7 @@ fn prepare_reissue() -> Result<()> {
 
     println!("\n-- Reissue Request (Base64) --");
     let bytes = bincode::serialize(&mint_request).unwrap();
-    println!("{}", base64::encode(&bytes));
+    println!("{}", encode(&bytes));
     println!("-- End Reissue Request --\n");
 
     Ok(())
@@ -580,7 +580,7 @@ fn prepare_reissue() -> Result<()> {
 
 fn reissue(mint: &mut Mint) -> Result<()> {
 
-    let mr_bytes = base64::decode(readline_prompt("\nReissue Request: ")).unwrap();
+    let mr_bytes = decode(readline_prompt("\nReissue Request: ")).unwrap();
     let mint_request = mr_from_bytes(&mr_bytes);
 
     let input_hashes = BTreeSet::from_iter(mint_request.transaction.inputs.iter().map(|e| e.name()));
@@ -628,7 +628,7 @@ fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
         let dbc = if dbc_base64 == "done" {
             break;
         } else {
-            let bytes = base64::decode(&dbc_base64)?;
+            let bytes = decode(&dbc_base64)?;
             dbc_from_bytes(&bytes)
         };
 
@@ -636,7 +636,7 @@ fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
         let secret = if key == "done" {
             break;
         } else {
-            let b64 = base64::decode(&key)?;
+            let b64 = decode(&key)?;
             sks_from_bytes(b64.as_slice())
         };
 
@@ -644,7 +644,7 @@ fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
     }
     let amounts_input = readline_prompt("\nOutput Amounts: ");
     let pub_out = readline_prompt("\nOutput Public Key Set: ");
-    let pub_out_bytes = base64::decode(&pub_out)?;
+    let pub_out_bytes = decode(&pub_out)?;
     let pub_out_set = pks_from_bytes(pub_out_bytes.as_slice());
 
     let amounts: Vec<u64> = amounts_input
@@ -816,6 +816,14 @@ fn readline() -> String {
     let mut line = String::new();
     std::io::stdin().read_line(&mut line).unwrap(); // including '\n'
     line.trim().to_string()
+}
+
+fn encode<T: AsRef<[u8]>>(data: T) -> String {
+    hex::encode(data)
+}
+
+fn decode<T: AsRef<[u8]>>(data: T) -> Result<Vec<u8>> {
+    hex::decode(data).map_err(|e| anyhow!(format!("{}", e)))
 }
 
 // fn byte_slice_to_array_32(slice: &[u8]) -> [u8; 32] {
