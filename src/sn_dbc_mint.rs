@@ -9,63 +9,18 @@
 
 //! Basic chat like example that demonstrates how to connect with peers and exchange data.
 
-mod common;
-
-use anyhow::{anyhow, Context, Result, Error};
+use anyhow::{anyhow, Result, Error};
 use bls_dkg::key_gen::{PublicKeySet, SecretKeyShare};
-use bytes::Bytes;
-use common::{Event, EventReceivers};
-use qp2p::{Config, Endpoint, QuicP2p};
 use rustyline::config::Configurer;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use sn_dbc::{Dbc, DbcContent, Hash, Mint, MintRequest, MintTransaction};
 use std::collections::{BTreeSet, BTreeMap, HashMap, HashSet};
 use std::iter::FromIterator;
-use std::{
-    net::SocketAddr,
-    sync::{Arc, Mutex},
-};
-use structopt::StructOpt;
-use threshold_crypto::{Signature, SignatureShare, SecretKeySet};
+use threshold_crypto::{Signature, SignatureShare, SecretKeySet, PublicKeyShare};
 use threshold_crypto::poly::Poly;
-use tokio::task::JoinHandle;
 use serde::{Serialize, Deserialize};
 use threshold_crypto::serde_impl::SerdeSecret;
-
-struct PeerList {
-    peers: Vec<SocketAddr>,
-}
-
-impl PeerList {
-    fn new() -> Self {
-        Self { peers: Vec::new() }
-    }
-
-    fn insert(&mut self, peer: SocketAddr) {
-        if !self.peers.contains(&peer) {
-            self.peers.push(peer)
-        }
-    }
-
-    fn remove(&mut self, peer_idx: usize) -> Result<SocketAddr> {
-        if peer_idx < self.peers.len() {
-            Ok(self.peers.remove(peer_idx))
-        } else {
-            Err(anyhow!("Index out of bounds"))
-        }
-    }
-
-    fn get(&self, peer_idx: usize) -> Option<&SocketAddr> {
-        self.peers.get(peer_idx)
-    }
-
-    fn list(&self) {
-        for (idx, peer) in self.peers.iter().enumerate() {
-            println!("{:3}: client:{}", idx, peer);
-        }
-    }
-}
 
 #[derive(Debug)]
 struct MintInfo {
@@ -79,33 +34,10 @@ struct MintInfo {
 struct SignatureShareMap(HashMap<Hash, SignatureShare>);
 
 
-/// This chat app connects two machines directly without intermediate servers and allows
-/// to exchange messages securely. All the messages are end to end encrypted.
-#[derive(Debug, StructOpt)]
-struct CliArgs {
-    #[structopt(flatten)]
-    quic_p2p_opts: Config,
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let CliArgs { mut quic_p2p_opts } = CliArgs::from_args();
-    quic_p2p_opts.local_ip = Some("127.0.0.1".parse()?);  // hack. make cli start without --local-ip.
-
-    let qp2p = QuicP2p::with_config(Some(quic_p2p_opts), Default::default(), false)?;
-    let (endpoint, incoming_connections, incoming_messages, disconnections) =
-        qp2p.new_endpoint().await?;
-    let event_rx = EventReceivers {
-        incoming_connections,
-        incoming_messages,
-        disconnections,
-    };
+fn main() -> Result<()> {
 
     print_logo();
     println!("Type 'help' to get started.");
-
-    let peerlist = Arc::new(Mutex::new(PeerList::new()));
-    let _rx_thread = handle_qp2p_events(event_rx, peerlist.clone());
 
     let mut mintinfo: MintInfo = new_mint(1000)?;
 
@@ -120,28 +52,7 @@ async fn main() -> Result<()> {
                 } else {
                     continue 'outer;
                 };
-                let mut peerlist = peerlist.lock().unwrap();
                 let result = match cmd {
-                    "ourinfo" => {
-                        print_ourinfo(&endpoint);
-                        Ok(())
-                    }
-                    "addpeer" => {
-                        let addr = parse_peer(&args.collect::<Vec<_>>().join(" "))?;
-                        endpoint.connect_to(&addr).await?;
-                        peerlist.insert(addr);
-                        Ok(())
-                    }
-                    "listpeers" => {
-                        peerlist.list();
-                        Ok(())
-                    }
-                    "delpeer" => args
-                        .next()
-                        .ok_or_else(|| anyhow!("Missing index argument"))
-                        .and_then(|idx| idx.parse().map_err(|_| anyhow!("Invalid index argument")))
-                        .and_then(|idx| peerlist.remove(idx))
-                        .and(Ok(())),
                     "mintinfo" => print_mintinfo(&args.collect::<Vec<_>>().join(" "), &mintinfo),
                     "prepare_tx" => prepare_tx(),
                     "sign_tx" => sign_tx(),
@@ -150,11 +61,9 @@ async fn main() -> Result<()> {
                     "reissue_ez" => reissue_ez(&mut mintinfo),
                     "newkey" => newkey(),
                     "decode" => decode_input(),
-                    "send" => on_cmd_send(&mut args, &peerlist, &endpoint).await,
                     "quit" | "exit" => break 'outer,
                     "help" => {
                         println!(
-//                            "Commands: ourinfo, addpeer, listpeers, delpeer, newkey, mintinfo [dbg], reissue, reissue_ez, send, quit, exit, help"
                             "Commands: newkey, mintinfo [dbg], reissue, reissue_ez, decode, exit, help"
                         );
                         Ok(())
@@ -172,8 +81,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    drop(qp2p);
-    // rx_thread.await?;
     Ok(())
 }
 
@@ -216,8 +123,14 @@ fn newkey() -> Result<()> {
 
     println!("\n -- SecretKeyShares --");
     for i in (0..sks.threshold()+5).into_iter() {
-        println!("  {}. {}", i, encode(&sk_to_bytes(&sks.secret_key_share(i))?));
+        println!("  {}. {}", i, encode(&sks_to_bytes(&sks.secret_key_share(i))?));
     }
+
+    println!("\n -- PublicKeyShares --");
+    for i in (0..sks.threshold()+5).into_iter() {
+        println!("  {}. {}", i, to_be_hex::<PublicKeyShare>(&sks.public_keys().public_key_share(i))?);
+    }
+
     println!("\n -- PublicKeySet --\n{}\n", to_be_hex(&sks.public_keys())?);
     
     println!("\nSigning Threshold: {}  ({} signers required)\n", sks.threshold(), sks.threshold()+1);
@@ -242,8 +155,8 @@ fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
 
     println!("-- Mint Keys --\n");
     println!(
-        "SecretKeySet: {}\n",
-        encode(&sk_to_bytes(&mintinfo.genesis_key.secret_key_share)?)
+        "SecretKeyShare: {}\n",
+        encode(&sks_to_bytes(&mintinfo.genesis_key.secret_key_share)?)
     );
     println!("PublicKeySet: {}\n", to_be_hex(&mintinfo.genesis_key.public_key_set)?);
 
@@ -266,6 +179,7 @@ fn print_dbc_human(dbc: &Dbc, outputs: bool) -> Result<()> {
     println!("id: {}\n", encode(dbc.name()));
     println!("amount: {}\n", dbc.content.amount);
     println!("output_number: {}\n", dbc.content.output_number);
+    println!("owner: {}\n", to_be_hex(&dbc.content.owner)?);
 
     // dbc.content.parents and dbc.transaction.inputs seem to be the same
     // so for now we are just displaying the latter.
@@ -292,7 +206,7 @@ fn print_dbc_human(dbc: &Dbc, outputs: bool) -> Result<()> {
 }
 
 fn decode_input() -> Result<()> {
-    let t = readline_prompt("\n[d: DBC, t: Transaction, s: SignatureShareMap, r: ReissueRequest\nType: ")?;
+    let t = readline_prompt("\n[d: DBC, t: Transaction, s: SignatureShareMap, r: ReissueRequest, pks: PublicKeySet, sks: SecretKeySet]\nType: ")?;
     let input = readline_prompt("\nPaste Data: ")?;
     let bytes = decode(input)?;
 
@@ -302,6 +216,22 @@ fn decode_input() -> Result<()> {
             print_dbc_human(&from_be_bytes(&bytes)?, true)?;
             println!("\n\n-- End DBC --\n");
         },
+        "pks" => { 
+            let pks: PublicKeySet = from_be_bytes(&bytes)?;
+            println!("\n\n-- Start PublicKeySet --");
+            println!("threshold: {} ({} signature shares required)\n", pks.threshold(), pks.threshold()+1);
+            println!("public_key: {}", encode(&pks.public_key().to_bytes()));
+            println!("PublicKeyShare[0]: {}", to_be_hex(&pks.public_key_share(0))? );
+            println!("-- End PublicKeySet --\n");
+        },
+        "sks" => { 
+            let poly: Poly = from_be_bytes(&bytes)?;
+            let sks = SecretKeySet::from(poly);
+            println!("\n\n-- Start SecretKeySet --");
+            println!("threshold: {} ({} signature shares required)\n", sks.threshold(), sks.threshold()+1);
+            println!("SecretKeyShare[0]: {}", encode(sks_to_bytes(&sks.secret_key_share(0))?) );
+            println!("-- End SecretKeySet --\n");
+        },
         "t" => println!("\n\n-- Transaction -- {:#?}", from_be_bytes::<MintTransaction>(&bytes)?),
         "s" => println!("\n\n-- SignatureShareMap -- {:#?}", from_be_bytes::<SignatureShareMap>(&bytes)?),
         "r" => println!("\n\n-- ReissueRequest -- {:#?}", from_be_bytes::<MintRequest>(&bytes)?),
@@ -310,66 +240,6 @@ fn decode_input() -> Result<()> {
     println!();
 
     Ok(())
-}
-
-
-async fn on_cmd_send<'a>(
-    mut args: impl Iterator<Item = &'a str>,
-    peer_list: &PeerList,
-    endpoint: &Endpoint,
-) -> Result<()> {
-    let peer = args
-        .next()
-        .with_context(|| "Missing index argument")
-        .and_then(|idx| idx.parse().map_err(|_| anyhow!("Invalid index argument")))
-        .and_then(|idx| {
-            peer_list
-                .get(idx)
-                .ok_or_else(|| anyhow!("Index out of bounds"))
-        })?;
-    let msg = Bytes::from(args.collect::<Vec<_>>().join(" "));
-    endpoint.send_message(msg, peer).await.map_err(From::from)
-}
-
-fn handle_qp2p_events(
-    mut event_rx: EventReceivers,
-    peer_list: Arc<Mutex<PeerList>>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            match event {
-                Event::ConnectedTo { addr } => peer_list.lock().unwrap().insert(addr),
-                Event::NewMessage { src, msg } => {
-                    if msg.len() > 512 {
-                        println!("[{}] received bytes: {}", src, msg.len());
-                    } else {
-                        println!(
-                            "[{}] {}",
-                            src,
-                            String::from_utf8(msg.to_vec())
-                                .unwrap_or_else(|_| "Invalid String".to_string())
-                        );
-                    }
-                }
-            }
-        }
-    })
-}
-
-fn parse_peer(input: &str) -> Result<SocketAddr> {
-    parse_socket_addr(&input).map_err(|_| {
-        anyhow!("Invalid peer (valid examples: \"1.2.3.4:5678\", \"8.7.6.5:4321\", ...)")
-    })
-}
-
-fn parse_socket_addr(input: &str) -> Result<SocketAddr> {
-    input.parse().map_err(|_| anyhow!("Invalid socket address"))
-}
-
-fn print_ourinfo(endpoint: &Endpoint) {
-    let ourinfo = endpoint.socket_addr();
-
-    println!("Our info: {}", ourinfo);
 }
 
 fn print_logo() {
@@ -428,7 +298,7 @@ fn prepare_tx() -> Result<()> {
             continue;
         }
 
-        let line = readline_prompt("\nPublic Key Set, or 'cancel': ")?;
+        let line = readline_prompt("\nPublicKeySet, or 'cancel': ")?;
         let pub_out = if line == "cancel" {
             break;
         } else {
@@ -471,7 +341,7 @@ fn prepare_tx() -> Result<()> {
 
 fn sign_tx() -> Result<()> {
 
-    let tx_input = readline_prompt("\nTx: ")?;
+    let tx_input = readline_prompt("\nMintTransaction: ")?;
     let tx: MintTransaction = from_be_hex(&tx_input)?;
 
     let mut inputs: HashMap<Dbc, SecretKeyShare> = Default::default();
@@ -508,7 +378,7 @@ fn sign_tx() -> Result<()> {
 
 fn prepare_reissue() -> Result<()> {
 
-    let tx_input = readline_prompt("\nTx: ")?;
+    let tx_input = readline_prompt("\nMintTransaction: ")?;
     let tx: MintTransaction = from_be_hex(&tx_input)?;
     let mut sig_shares_by_input: HashMap<Hash, BTreeMap<usize, SignatureShare>> = Default::default();
 
@@ -549,9 +419,9 @@ fn prepare_reissue() -> Result<()> {
         input_ownership_proofs: proofs,
     };
 
-    println!("\n-- Reissue Request (Base64) --");    
+    println!("\n-- MintRequest (Base64) --");    
     println!("{}", to_be_hex(&mint_request)?);
-    println!("-- End Reissue Request --\n");
+    println!("-- End MintRequest --\n");
 
     Ok(())
 }
@@ -559,7 +429,7 @@ fn prepare_reissue() -> Result<()> {
 
 fn reissue(mint: &mut Mint) -> Result<()> {
 
-    let mr_input = readline_prompt("\nReissue Request: ")?;
+    let mr_input = readline_prompt("\nMintRequest: ")?;
     let mint_request: MintRequest = from_be_hex(&mr_input)?;
 
     let input_hashes = BTreeSet::from_iter(mint_request.transaction.inputs.iter().map(|e| e.name()));
@@ -610,7 +480,7 @@ fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
             from_be_hex(&dbc_input)?
         };
 
-        let key = readline_prompt("\nInput DBC Secret Key, or 'done': ")?;
+        let key = readline_prompt("\nInput DBC SecretKeyShare, or 'done': ")?;
         let secret = if key == "done" {
             break;
         } else {
@@ -620,7 +490,7 @@ fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
         inputs.insert(dbc, secret);
     }
     let amounts_input = readline_prompt("\nOutput Amounts: ")?;
-    let pks_input = readline_prompt("\nOutput Public Key Set: ")?;
+    let pks_input = readline_prompt("\nOutput PublicKeySet: ")?;
     let pub_out_set: PublicKeySet = from_be_hex(&pks_input)?;
 
     let amounts: Vec<u64> = amounts_input
@@ -740,7 +610,7 @@ fn bls_dkg_id(num_shares: usize) -> Result<bls_dkg::outcome::Outcome> {
     result
 }
 
-fn sk_to_bytes(sk: &SecretKeyShare) -> Result<Vec<u8>> {
+fn sks_to_bytes(sk: &SecretKeyShare) -> Result<Vec<u8>> {
     bincode::serialize(&SerdeSecret(&sk))
         .map(|bytes| bincode_bytes_to_big_endian_bytes(bytes))
         .map_err(|e| anyhow!("{}", e))
