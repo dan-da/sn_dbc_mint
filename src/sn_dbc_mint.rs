@@ -17,7 +17,7 @@ use rustyline::Editor;
 use sn_dbc::{Dbc, DbcContent, Hash, Mint, MintRequest, MintTransaction};
 use std::collections::{BTreeSet, BTreeMap, HashMap, HashSet};
 use std::iter::FromIterator;
-use threshold_crypto::{Signature, SignatureShare, SecretKeySet, PublicKeyShare};
+use threshold_crypto::{Signature, SignatureShare, SecretKeySet};
 use threshold_crypto::poly::Poly;
 use serde::{Serialize, Deserialize};
 use threshold_crypto::serde_impl::SerdeSecret;
@@ -128,7 +128,9 @@ fn newkey() -> Result<()> {
 
     println!("\n -- PublicKeyShares --");
     for i in (0..sks.threshold()+5).into_iter() {
-        println!("  {}. {}", i, to_be_hex::<PublicKeyShare>(&sks.public_keys().public_key_share(i))?);
+// temporary: the 2nd line matches ian coleman's bls tool output.  but why not the first?        
+//        println!("  {}. {}", i, to_be_hex::<PublicKeyShare>(&sks.public_keys().public_key_share(i))?);
+        println!("  {}. {}", i, encode(&sks.public_keys().public_key_share(i).to_bytes()));
     }
 
     println!("\n -- PublicKeySet --\n{}\n", to_be_hex(&sks.public_keys())?);
@@ -221,7 +223,9 @@ fn decode_input() -> Result<()> {
             println!("\n\n-- Start PublicKeySet --");
             println!("threshold: {} ({} signature shares required)\n", pks.threshold(), pks.threshold()+1);
             println!("public_key: {}", encode(&pks.public_key().to_bytes()));
-            println!("PublicKeyShare[0]: {}", to_be_hex(&pks.public_key_share(0))? );
+// temporary: the 2nd line matches ian coleman's bls tool output.  but why not the first?
+//            println!("PublicKeyShare[0]: {}", to_be_hex(&pks.public_key_share(0))? );
+            println!("PublicKeyShare[0]: {}", encode(&pks.public_key_share(0).to_bytes()) );
             println!("-- End PublicKeySet --\n");
         },
         "sks" => { 
