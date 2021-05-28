@@ -98,7 +98,7 @@ fn newkey() -> Result<()> {
 
     let poly_input = readline_prompt("\nPoly of existing SecretKeySet (or 'new' to generate new key): ")?;
 
-    let sks = match poly_input.as_str() {
+    let (poly, sks) = match poly_input.as_str() {
         "new" => {
             let m = loop {
                 let m: usize = readline_prompt("\nHow many shares needed to sign (m in m-of-n): ")?.parse()?;
@@ -110,16 +110,18 @@ fn newkey() -> Result<()> {
                 break m;
             };
 
-            mk_secret_key_set(m-1)
+            mk_secret_key_set(m-1)?
         },
         _ => {
             let poly: Poly = from_be_hex(&poly_input)?;
-            // println!("Poly Hex: {}", to_be_hex(&poly)?);
-            // println!("Commitment Hex: {}", to_be_hex(&poly.commitment())?);
-
-            SecretKeySet::from(poly)
+            (poly.clone(), SecretKeySet::from(poly))
         }
     };
+
+    println!("Poly Hex: {}", to_be_hex(&poly)?);
+
+    // poly.commitment() is the same as the PublicKeySet returned from sks.public_keys()
+    // println!("Commitment Hex: {}", to_be_hex(&poly.commitment())?);
 
     println!("\n -- SecretKeyShares --");
     for i in (0..sks.threshold()+5).into_iter() {
@@ -583,8 +585,11 @@ fn reissue_ez_worker(
     Ok(())
 }
 
-fn mk_secret_key_set(threshold: usize) -> SecretKeySet {
-    SecretKeySet::random(threshold, &mut rand::thread_rng())
+fn mk_secret_key_set(threshold: usize) -> Result<(Poly, SecretKeySet)> {
+    let mut rng = rand::thread_rng();
+    let poly = Poly::try_random(threshold, &mut rng).map_err(|e| anyhow!("{}", e))?;
+    Ok((poly.clone(), SecretKeySet::from(poly)))
+//    SecretKeySet::random(threshold, &mut rand::thread_rng())
 }
 
 fn bls_dkg_id(num_shares: usize) -> Result<bls_dkg::outcome::Outcome> {
