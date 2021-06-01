@@ -66,7 +66,7 @@ fn main() -> Result<()> {
                     "quit" | "exit" => break 'outer,
                     "help" => {
                         println!(
-                            "Commands: mintinfo, newkey, newmint, prepare_tx, sign_tx, prepare_reissue, reissue, reissue_ez, decode, validate, exit, help\n"
+                            "\nCommands:\n  Mint:    [mintinfo, newmint, reissue]\n  Client:  [newkey, prepare_tx, sign_tx, prepare_reissue, reissue_ez, decode, validate]\n  General: [exit, help]\n"
                         );
                         Ok(())
                     }
