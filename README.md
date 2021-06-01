@@ -18,7 +18,6 @@ and generated SecretKeyShare and PublicKeyShare match up.
 Key components are:
 * [sn_dbc](https://github.com/maidsafe/sn_dbc/) - Safe Network DBC library
 * [threshold_crypto](https://github.com/poanetwork/threshold_crypto) - BLS key library
-* [bls_dkg](https://github.com/maidsafe/bls_dkg) - BLS Distribute Key Generation
 
 
 ## Building
