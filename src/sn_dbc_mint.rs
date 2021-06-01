@@ -10,7 +10,6 @@
 //! Safe Network DBC Mint CLI playground.
 
 use anyhow::{anyhow, Error, Result};
-use bls_dkg::key_gen::{PublicKeySet, SecretKeyShare};
 use rustyline::config::Configurer;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
@@ -20,13 +19,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::iter::FromIterator;
 use threshold_crypto::poly::Poly;
 use threshold_crypto::serde_impl::SerdeSecret;
-use threshold_crypto::{SecretKeySet, Signature, SignatureShare};
+use threshold_crypto::{PublicKeySet, SecretKeySet, SecretKeyShare, Signature, SignatureShare};
 
-#[derive(Debug)]
 struct MintInfo {
     mint: Mint,
     genesis: Dbc,
-    genesis_key: bls_dkg::outcome::Outcome,
+    secret_key_set: SecretKeySet,
+    poly: Poly,
 }
 
 /// This type is just for serializing HashMap<Hash, <HashMap<usize, SignatureShare>>
@@ -35,9 +34,9 @@ struct SignatureSharesMap(HashMap<Hash, HashMap<usize, SignatureShare>>);
 
 fn main() -> Result<()> {
     print_logo();
-    println!("Type 'help' to get started.");
+    println!("Type 'help' to get started.\n");
 
-    let mut mintinfo: MintInfo = new_mint(1000)?;
+    let mut mintinfo: MintInfo = mk_new_random_mint(0, 1000)?;
 
     let mut rl = Editor::<()>::new();
     rl.set_auto_add_history(true);
@@ -51,7 +50,11 @@ fn main() -> Result<()> {
                     continue 'outer;
                 };
                 let result = match cmd {
-                    "mintinfo" => print_mintinfo(&args.collect::<Vec<_>>().join(" "), &mintinfo),
+                    "newmint" => {
+                        mintinfo = newmint()?;
+                        Ok(())
+                    }
+                    "mintinfo" => print_mintinfo_human(&mintinfo),
                     "prepare_tx" => prepare_tx(),
                     "sign_tx" => sign_tx(),
                     "prepare_reissue" => prepare_reissue(),
@@ -63,7 +66,7 @@ fn main() -> Result<()> {
                     "quit" | "exit" => break 'outer,
                     "help" => {
                         println!(
-                            "Commands: newkey, mintinfo [dbg], reissue, reissue_ez, decode, exit, help"
+                            "Commands: mintinfo, newkey, newmint, prepare_tx, sign_tx, prepare_reissue, reissue, reissue_ez, decode, validate, exit, help\n"
                         );
                         Ok(())
                     }
@@ -83,19 +86,65 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn new_mint(amount: u64) -> Result<MintInfo> {
-    let genesis_key = crate::bls_dkg_id(1)?;
-    let (mint, dbc) = Mint::genesis(genesis_key.public_key_set.clone(), amount);
+fn newmint() -> Result<MintInfo> {
+    let confirm = readline_prompt(
+        "\nThis will erase existing Mint and transactions.  Are you sure? [y/n]: ",
+    )?;
+    if confirm != "y" {
+        return Err(anyhow!("newmint operation cancelled"));
+    }
+
+    let amount = loop {
+        let amount: u64 = readline_prompt("\nTotal Money Supply Amount: ")?.parse()?;
+
+        if amount > 0 {
+            break amount;
+        }
+    };
+
+    let poly_input = readline_prompt_nl("\nSecretKeySet Poly Hex, or [r]andom: ")?;
+
+    let mintinfo = match poly_input.as_str() {
+        "r" => {
+            let threshold = loop {
+                let num_signers: usize = readline_prompt("\nHow many signers: ")?.parse()?;
+
+                if num_signers > 0 {
+                    break num_signers - 1;
+                }
+            };
+            mk_new_random_mint(threshold, amount)?
+        }
+        _ => {
+            let poly: Poly = from_be_hex(&poly_input)?;
+            let secret_key_set = SecretKeySet::from(poly.clone());
+            mk_new_mint(secret_key_set, poly, amount)?
+        }
+    };
+
+    println!("\nMint created!\n");
+
+    Ok(mintinfo)
+}
+
+fn mk_new_random_mint(threshold: usize, amount: u64) -> Result<MintInfo> {
+    let (poly, secret_key_set) = mk_secret_key_set(threshold)?;
+    mk_new_mint(secret_key_set, poly, amount)
+}
+
+fn mk_new_mint(secret_key_set: SecretKeySet, poly: Poly, amount: u64) -> Result<MintInfo> {
+    let (mint, dbc) = Mint::genesis(secret_key_set.public_keys(), amount);
     Ok(MintInfo {
         mint,
         genesis: dbc,
-        genesis_key,
+        secret_key_set,
+        poly,
     })
 }
 
 fn newkey() -> Result<()> {
     let poly_input =
-        readline_prompt("\nPoly of existing SecretKeySet (or 'new' to generate new key): ")?;
+        readline_prompt_nl("\nPoly of existing SecretKeySet (or 'new' to generate new key): ")?;
 
     let (poly, sks) = match poly_input.as_str() {
         "new" => {
@@ -118,7 +167,7 @@ fn newkey() -> Result<()> {
         }
     };
 
-    println!("Poly Hex: {}", to_be_hex(&poly)?);
+    println!("\n -- Poly Hex --\n  {}", to_be_hex(&poly)?);
 
     // poly.commitment() is the same as the PublicKeySet returned from sks.public_keys()
     // println!("Commitment Hex: {}", to_be_hex(&poly.commitment())?);
@@ -157,29 +206,47 @@ fn newkey() -> Result<()> {
     Ok(())
 }
 
-fn print_mintinfo(args: &str, mintinfo: &MintInfo) -> Result<()> {
-    match args == "dbg" {
-        true => print_mintinfo_debug(mintinfo),
-        false => print_mintinfo_human(mintinfo),
-    }
-}
-
-fn print_mintinfo_debug(mintinfo: &MintInfo) -> Result<()> {
-    println!("\n{:#?}\n", mintinfo);
-    Ok(())
-}
-
 fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
     println!();
 
     println!("-- Mint Keys --\n");
-    println!(
-        "SecretKeyShare: {}\n",
-        encode(&sks_to_bytes(&mintinfo.genesis_key.secret_key_share)?)
-    );
+    println!("SecretKeySet (Poly): {}\n", to_be_hex(&mintinfo.poly)?);
+
     println!(
         "PublicKeySet: {}\n",
-        to_be_hex(&mintinfo.genesis_key.public_key_set)?
+        to_be_hex(&mintinfo.secret_key_set.public_keys())?
+    );
+
+    println!("\n   -- SecretKeyShares --");
+    for i in (0..mintinfo.secret_key_set.threshold() + 2).into_iter() {
+        println!(
+            "    {}. {}",
+            i,
+            encode(&sks_to_bytes(&mintinfo.secret_key_set.secret_key_share(i))?)
+        );
+    }
+
+    println!("\n   -- PublicKeyShares --");
+    for i in (0..mintinfo.secret_key_set.threshold() + 2).into_iter() {
+        // the 2nd line matches ian coleman's bls tool output.  but why not the first?
+        //        println!("  {}. {}", i, to_be_hex::<PublicKeyShare>(&sks.public_keys().public_key_share(i))?);
+        println!(
+            "    {}. {}",
+            i,
+            encode(
+                &mintinfo
+                    .secret_key_set
+                    .public_keys()
+                    .public_key_share(i)
+                    .to_bytes()
+            )
+        );
+    }
+
+    println!(
+        "\n   Required Signers: {}   (Threshold = {})",
+        mintinfo.secret_key_set.threshold() + 1,
+        mintinfo.secret_key_set.threshold()
     );
 
     println!("\n-- Genesis DBC --\n");
@@ -229,7 +296,7 @@ fn print_dbc_human(dbc: &Dbc, outputs: bool) -> Result<()> {
 
 fn decode_input() -> Result<()> {
     let t = readline_prompt("\n[d: DBC, mt: MintTransaction, s: SignatureSharesMap, mr: MintRequest, pks: PublicKeySet, sks: SecretKeySet]\nType: ")?;
-    let input = readline_prompt("\nPaste Data: ")?;
+    let input = readline_prompt_nl("\nPaste Data: ")?;
     let bytes = decode(input)?;
 
     match t.as_str() {
@@ -307,7 +374,7 @@ __)(_| |(/_ | \|(/_|_\/\/(_)| |<
 /// Implements validate command.  Validates correctness and that a
 /// DBC has not been double-spent, but does not check if spent/unspent.
 fn validate(mintinfo: &MintInfo) -> Result<()> {
-    let dbc_input = readline_prompt("\nInput DBC, or 'cancel': ")?;
+    let dbc_input = readline_prompt_nl("\nInput DBC, or 'cancel': ")?;
     let dbc: Dbc = if dbc_input == "cancel" {
         println!("\nvalidate cancelled\n");
         return Ok(());
@@ -331,11 +398,11 @@ fn prepare_tx() -> Result<()> {
 
     let mut inputs_total: u64 = 0;
     loop {
-        let dbc_base64 = readline_prompt("\nInput DBC, or 'done': ")?;
-        let dbc: Dbc = if dbc_base64 == "done" {
+        let dbc_input = readline_prompt_nl("\nInput DBC, or 'done': ")?;
+        let dbc: Dbc = if dbc_input == "done" {
             break;
         } else {
-            from_be_hex(&dbc_base64)?
+            from_be_hex(&dbc_input)?
         };
 
         inputs_total += dbc.content.amount;
@@ -367,7 +434,7 @@ fn prepare_tx() -> Result<()> {
             continue;
         }
 
-        let line = readline_prompt("\nPublicKeySet, or 'cancel': ")?;
+        let line = readline_prompt_nl("\nPublicKeySet, or 'cancel': ")?;
         let pub_out = if line == "cancel" {
             break;
         } else {
@@ -395,11 +462,11 @@ fn prepare_tx() -> Result<()> {
         return Ok(());
     }
 
-    println!("\n\nThank-you.   Preparing Tx...\n\n");
+    println!("\n\nThank-you.   Preparing MintTransaction...\n\n");
 
     let transaction = MintTransaction { inputs, outputs };
 
-    println!("\n-- MintTransaction (Base64) --");
+    println!("\n-- MintTransaction --");
     println!("{}", to_be_hex(&transaction)?);
     println!("-- End MintTransaction --\n");
 
@@ -408,7 +475,7 @@ fn prepare_tx() -> Result<()> {
 
 /// Implements sign_tx command.
 fn sign_tx() -> Result<()> {
-    let tx_input = readline_prompt("\nMintTransaction: ")?;
+    let tx_input = readline_prompt_nl("\nMintTransaction: ")?;
     let tx: MintTransaction = from_be_hex(&tx_input)?;
 
     let mut inputs: HashMap<Dbc, HashMap<usize, SecretKeyShare>> = Default::default();
@@ -425,7 +492,7 @@ fn sign_tx() -> Result<()> {
 
         let mut secrets: HashMap<usize, SecretKeyShare> = Default::default();
         loop {
-            let key = readline_prompt("\nSecretKeyShare, or 'done': ")?;
+            let key = readline_prompt_nl("\nSecretKeyShare, or 'done': ")?;
             let secret: SecretKeyShare = if key == "done" {
                 break;
             } else {
@@ -435,11 +502,15 @@ fn sign_tx() -> Result<()> {
             let idx: usize = idx_input.parse()?;
 
             secrets.insert(idx, secret);
+
+            if secrets.len() > dbc.content.owner.threshold() {
+                break;
+            }
         }
         inputs.insert(dbc.clone(), secrets);
     }
 
-    println!("\n\nThank-you.   Preparing Signature...\n\n");
+    println!("\n\nThank-you.   Preparing SignatureSharesMap...\n\n");
 
     let mut sig_shares: SignatureSharesMap = Default::default();
     for (dbc, secrets) in inputs.iter() {
@@ -451,7 +522,7 @@ fn sign_tx() -> Result<()> {
         sig_shares.0.insert(dbc.name(), sigs);
     }
 
-    println!("\n-- SignatureSharesMap (Base64) --");
+    println!("\n-- SignatureSharesMap --");
     println!("{}", to_be_hex(&sig_shares)?);
     println!("-- End SignatureSharesMap --\n");
 
@@ -460,7 +531,7 @@ fn sign_tx() -> Result<()> {
 
 /// Implements prepare_reissue command.
 fn prepare_reissue() -> Result<()> {
-    let tx_input = readline_prompt("\nMintTransaction: ")?;
+    let tx_input = readline_prompt_nl("\nMintTransaction: ")?;
     let tx: MintTransaction = from_be_hex(&tx_input)?;
     let mut sig_shares_by_input: HashMap<Hash, BTreeMap<usize, SignatureShare>> =
         Default::default();
@@ -477,7 +548,7 @@ fn prepare_reissue() -> Result<()> {
 
         let mut num_shares = 0usize;
         while num_shares < dbc.content.owner.threshold() + 1 {
-            let ssm_input = readline_prompt("\nSignatureSharesMap, or 'cancel': ")?;
+            let ssm_input = readline_prompt_nl("\nSignatureSharesMap, or 'cancel': ")?;
             let shares_map: SignatureSharesMap = if ssm_input == "cancel" {
                 println!("\nprepare_reissue cancelled.\n");
                 return Ok(());
@@ -515,14 +586,14 @@ fn prepare_reissue() -> Result<()> {
         proofs.insert(dbc.name(), sig);
     }
 
-    println!("\n\nThank-you.   Preparing Reissue Request...\n\n");
+    println!("\n\nThank-you.   Preparing MintRequest...\n\n");
 
     let mint_request = MintRequest {
         transaction: tx,
         input_ownership_proofs: proofs,
     };
 
-    println!("\n-- MintRequest (Base64) --");
+    println!("\n-- MintRequest --");
     println!("{}", to_be_hex(&mint_request)?);
     println!("-- End MintRequest --\n");
 
@@ -531,7 +602,7 @@ fn prepare_reissue() -> Result<()> {
 
 /// Implements reissue command.
 fn reissue(mint: &mut Mint) -> Result<()> {
-    let mr_input = readline_prompt("\nMintRequest: ")?;
+    let mr_input = readline_prompt_nl("\nMintRequest: ")?;
     let mint_request: MintRequest = from_be_hex(&mr_input)?;
 
     let input_hashes =
@@ -578,7 +649,7 @@ fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
         println!("Input DBC #{}", inputs.len());
         println!("--------------\n");
 
-        let dbc_input = readline_prompt("\nDBC Data, or 'done': ")?;
+        let dbc_input = readline_prompt_nl("\nDBC Data, or 'done': ")?;
         let dbc: Dbc = if dbc_input == "done" {
             break;
         } else {
@@ -592,7 +663,7 @@ fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
 
         let mut secrets: HashMap<usize, SecretKeyShare> = Default::default();
         while secrets.len() < dbc.content.owner.threshold() + 1 {
-            let key = readline_prompt("\nSecretKeyShare, or 'cancel': ")?;
+            let key = readline_prompt_nl("\nSecretKeyShare, or 'cancel': ")?;
             let secret = if key == "cancel" {
                 println!("\nreissue_ez cancelled\n");
                 return Ok(());
@@ -634,7 +705,7 @@ fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
             continue;
         }
 
-        let line = readline_prompt("\nPublicKeySet, or 'cancel': ")?;
+        let line = readline_prompt_nl("\nPublicKeySet, or 'cancel': ")?;
         let pub_out = if line == "cancel" {
             break;
         } else {
@@ -731,37 +802,6 @@ fn mk_secret_key_set(threshold: usize) -> Result<(Poly, SecretKeySet)> {
     Ok((poly.clone(), SecretKeySet::from(poly)))
 }
 
-/// Makes a SecretKeyShare and PublicKeySet, as if from a round of
-/// Distributed Key Generation (DKG)
-fn bls_dkg_id(num_shares: usize) -> Result<bls_dkg::outcome::Outcome> {
-    let owner_names: Vec<xor_name::XorName> = (0..num_shares)
-        .into_iter()
-        .map(|_| rand::random())
-        .collect();
-    let threshold = num_shares - 1;
-    let (mut key_gen, proposal) = match bls_dkg::KeyGen::initialize(
-        owner_names[0],
-        threshold,
-        BTreeSet::from_iter(owner_names),
-    ) {
-        Ok(key_gen_init) => key_gen_init,
-        Err(e) => panic!("Failed to init key gen {:?}", e),
-    };
-
-    let mut msgs = vec![proposal];
-    while let Some(msg) = msgs.pop() {
-        match key_gen.handle_message(&mut rand::thread_rng(), msg) {
-            Ok(response_msgs) => msgs.extend(response_msgs),
-            Err(e) => panic!("Error while generating BLS key: {:?}", e),
-        }
-    }
-
-    match key_gen.generate_keys() {
-        Some((_, outcome)) => Ok(outcome),
-        None => Err(anyhow!("Key generation failed")),
-    }
-}
-
 /// Serialize a SecretKeyShare as big endian bytes
 fn sks_to_bytes(sk: &SecretKeyShare) -> Result<Vec<u8>> {
     bincode::serialize(&SerdeSecret(&sk))
@@ -795,6 +835,20 @@ fn from_be_hex<T: for<'de> Deserialize<'de>>(s: &str) -> Result<T> {
 /// Prompts for input and reads the input.
 /// Re-prompts in a loop if input is empty.
 fn readline_prompt(prompt: &str) -> Result<String> {
+    use std::io::Write;
+    loop {
+        print!("{}", prompt);
+        std::io::stdout().flush()?;
+        let line = readline()?;
+        if !line.is_empty() {
+            return Ok(line);
+        }
+    }
+}
+
+/// Prompts for input and reads the input.
+/// Re-prompts in a loop if input is empty.
+fn readline_prompt_nl(prompt: &str) -> Result<String> {
     loop {
         println!("{}", prompt);
         let line = readline()?;
