@@ -5,9 +5,9 @@
 
 ## About
 
-This crate attempts to implement a P2P DBC Mint, built on sn_dbc, with an interactive CLI
-interface.  Sort of a playground for DBCs and BLS keys.  This is work-in-progress research
-and not yet stable.
+This crate implements a minimal P2P DBC Mint, built on sn_dbc, with an interactive CLI
+interface.  Sort of a playground for DBCs and BLS keys.  It implements both server (mint)
+and client functionality in a single process.
 
 A design goal is to be interoperable with Ian Coleman's web BLS tool/playground at:
 https://iancoleman.io/threshold_crypto_ui/
@@ -15,11 +15,11 @@ https://iancoleman.io/threshold_crypto_ui/
 Presently, SecretKeySet and PublicKeySet generated on the web tool can be used with sn_dbc_mint
 and generated SecretKeyShare and PublicKeyShare match up.
 
-
 Key components are:
 * [sn_dbc](https://github.com/maidsafe/sn_dbc/) - Safe Network DBC library
 * [threshold_crypto](https://github.com/poanetwork/threshold_crypto) - BLS key library
 * [bls_dkg](https://github.com/maidsafe/bls_dkg) - BLS Distribute Key Generation
+
 
 ## Building
 
@@ -41,10 +41,18 @@ Use the `help` command for a list of available commands.
 
 For a simple guided reissue, use the `reissue_ez` command.
 
-For a multisig reissue of inputs with aggregated signatures (multisig) a more complex flow must be used:
+Alternatively, a manual reissue will use these commands in order.
 
 `prepare_tx` --> `sign_tx` --> `prepare_reissue` --> `reissue`
 
+## Usage Examples
+
+* [reissue_ez](./doc/examples/reissue_ez.txt)
+* [reissue_manual](./doc/examples/reissue_manual.txt)
+* [newkey](./doc/examples/newkey.txt)
+* [newmint](./doc/examples/newmint.txt)
+* [validate](./doc/examples/validate.txt)
+* [decode](./doc/examples/decode.txt)
 
 ## License
 
