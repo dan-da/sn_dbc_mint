@@ -387,7 +387,7 @@ fn print_dbc_human(dbc: &DbcOwned, outputs: bool) -> Result<()> {
 
 /// handles decode command.  
 fn decode_input() -> Result<()> {
-    let t = readline_prompt("\n[d: DBC, mt: ReissueTransaction, s: SignatureSharesMap, mr: ReissueRequest, pks: PublicKeySet, sks: SecretKeySet]\nType: ")?;
+    let t = readline_prompt("\n[d: DBC, rt: ReissueTransaction, s: SignatureSharesMap, rr: ReissueRequest, pks: PublicKeySet, sks: SecretKeySet]\nType: ")?;
     let input = readline_prompt_nl("\nPaste Data: ")?;
     let bytes = decode(input)?;
 
@@ -429,7 +429,7 @@ fn decode_input() -> Result<()> {
             );
             println!("-- End SecretKeySet --\n");
         }
-        "mt" => println!(
+        "rt" => println!(
             "\n\n-- ReissueTransaction -- {:#?}",
             from_be_bytes::<ReissueTransactionOwned>(&bytes)?
         ),
@@ -437,7 +437,7 @@ fn decode_input() -> Result<()> {
             "\n\n-- SignatureSharesMap -- {:#?}",
             from_be_bytes::<SignatureSharesMap>(&bytes)?
         ),
-        "mr" => println!(
+        "rr" => println!(
             "\n\n-- ReissueRequest -- {:#?}",
             from_be_bytes::<ReissueRequestOwned>(&bytes)?
         ),
@@ -476,9 +476,10 @@ fn validate(mintinfo: &MintInfo) -> Result<()> {
     };
 
     match dbc.confirm_valid(mintinfo.mintnode()?.key_cache()) {
-        Ok(_) => println!(
-            "\nThis DBC is valid.\n  (note: spent/unspent validation not yet implemented.)\n"
-        ),
+        Ok(_) => match mintinfo.mintnode()?.is_spent(dbc.name()) {
+            true => println!("\nThis DBC is unspendable.  (valid but has already been spent)\n"),
+            false => println!("\nThis DBC is spendable.   (valid and has not been spent)\n"),
+        },
         Err(e) => println!("\nInvalid DBC.  {}", e.to_string()),
     }
 
