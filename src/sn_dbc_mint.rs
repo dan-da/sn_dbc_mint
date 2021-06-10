@@ -143,6 +143,7 @@ fn newmint() -> Result<MintInfo> {
         }
     };
 
+    // polynomial, from which SecretKeySet is built.
     let poly_input = readline_prompt_nl("\nSecretKeySet Poly Hex, or [r]andom: ")?;
 
     let mintinfo = match poly_input.as_str() {
@@ -233,6 +234,7 @@ fn newkey() -> Result<()> {
     let poly_input =
         readline_prompt_nl("\nPoly of existing SecretKeySet (or 'new' to generate new key): ")?;
 
+    // Get poly and SecretKeySet from user, or make new random
     let (poly, sks) = match poly_input.as_str() {
         "new" => {
             let m = loop {
@@ -472,8 +474,8 @@ __)(_| |(/_ | \|(/_|_\/\/(_)| |<
     );
 }
 
-/// Implements validate command.  Validates correctness and that a
-/// DBC has not been double-spent, but does not check if spent/unspent.
+/// Implements validate command.  Validates signatures and that a
+/// DBC has not been double-spent.  Also checks if spent/unspent.
 fn validate(mintinfo: &MintInfo) -> Result<()> {
     let dbc_input = readline_prompt_nl("\nInput DBC, or 'cancel': ")?;
     let dbc: Dbc = if dbc_input == "cancel" {
@@ -500,6 +502,7 @@ fn prepare_tx() -> Result<()> {
     let mut inputs_owners: HashMap<Hash, PublicKeySet> = Default::default();
     let mut outputs_owners: HashMap<Hash, PublicKeySet> = Default::default();
 
+    // Get DBC inputs from user
     let mut inputs_total: u64 = 0;
     loop {
         let dbc_input = readline_prompt_nl("\nInput DBC, or 'done': ")?;
@@ -519,6 +522,7 @@ fn prepare_tx() -> Result<()> {
     let mut i = 0u32;
     let mut outputs: HashSet<DbcContent> = Default::default();
 
+    // Get outputs from user
     let mut outputs_total = 0u64;
     while inputs_total - outputs_total != 0 {
         println!();
@@ -593,6 +597,7 @@ fn sign_tx() -> Result<()> {
 
     let mut inputs: HashMap<Dbc, HashMap<usize, SecretKeyShare>> = Default::default();
 
+    // Get from user: (index, SecretKeyShare) for each input Dbc
     for (i, dbc) in tx.inner.inputs.iter().enumerate() {
         println!("-----------------");
         println!(
@@ -660,6 +665,8 @@ fn prepare_reissue() -> Result<()> {
     let mut sig_shares_by_input: HashMap<Hash, BTreeMap<usize, SignatureShare>> =
         Default::default();
 
+    // Get from user: SignatureSharesMap(s) for each tx input
+    //                until required # of SignatureShare obtained.
     for dbc in tx.inner.inputs.iter() {
         println!("-----------------");
         println!(
@@ -763,6 +770,7 @@ fn reissue(mintinfo: &mut MintInfo) -> Result<()> {
 fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
     let mut inputs: HashMap<DbcOwned, HashMap<usize, SecretKeyShare>> = Default::default();
 
+    // Get from user: input DBC(s) and required # of SecretKeyShare+index for each.
     loop {
         println!("--------------");
         println!("Input DBC #{}", inputs.len());
@@ -808,8 +816,9 @@ fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
     let mut outputs: HashSet<DbcContent> = Default::default();
 
     let mut outputs_pks: HashMap<Hash, PublicKeySet> = Default::default();
-
     let mut outputs_total = 0u64;
+
+    // Get from user: Amount and PublicKeySet for each output DBC
     while inputs_total - outputs_total != 0 {
         println!();
         println!("------------");
@@ -870,6 +879,7 @@ fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
         outputs,
     };
 
+    // for each input Dbc, combine owner's SignatureShare(s) to obtain owner's Signature
     let mut proofs: HashMap<Hash, (PublicKey, Signature)> = Default::default();
     for (dbc, secrets) in inputs.iter() {
         let mut sig_shares: BTreeMap<usize, SignatureShare> = Default::default();
@@ -902,13 +912,22 @@ fn reissue_exec(
 ) -> Result<()> {
     let mut results: Vec<(DbcTransaction, MintSignatures)> = Default::default();
     let mut mint_sig_shares: Vec<NodeSignature> = Default::default();
+
+    // Mint is multi-node.  So each mint node must execute Mint::reissue() and
+    // provide its SignatureShare, which the client must then combine together
+    // to form the mint's Signature.  This loop would exec on the client.
     for mint in mintinfo.mintnodes.iter_mut() {
+        // here we pretend the client has made a network request to a single mint node
+        // so this mint.reissue() execs on the Mint node and returns data to client.
         let (transaction, transaction_sigs) =
             mint.reissue(reissue_request.clone(), input_hashes.clone())?;
+
+        // and now we are back to client code.
 
         // Verify transaction returned to us by the Mint matches our request
         assert_eq!(reissue_request.transaction.blinded(), transaction);
 
+        // Make a list of NodeSignature (sigshare from each Mint Node)
         let mut node_shares: Vec<NodeSignature> =
             transaction_sigs.iter().map(|e| e.1 .1.clone()).collect();
         mint_sig_shares.append(&mut node_shares);
@@ -930,21 +949,25 @@ fn reissue_exec(
         results.push((transaction, transaction_sigs));
     }
 
+    // Transform Vec<NodeSignature> to Vec<u64, &SignatureShare>
     let mint_sig_shares_ref: Vec<(u64, &SignatureShare)> = mint_sig_shares
         .iter()
         .map(|e| e.threshold_crypto())
         .collect();
 
+    // Combine signatures from all the mint nodes to obtain Mint's Signature.
     let mint_sig = mintinfo
         .secret_key_set
         .public_keys()
         .combine_signatures(mint_sig_shares_ref)
         .map_err(|e| anyhow!(e))?;
 
+    // Obtain a copy of the tx and sigs from the first MintNode results.
     let (transaction, transaction_sigs) = results
         .get(0)
         .ok_or_else(|| anyhow!("Signature not found"))?;
 
+    // Form the final output DBCs, with Mint's Signature for each.
     let mut output_dbcs: Vec<Dbc> = reissue_request
         .transaction
         .outputs
@@ -967,6 +990,7 @@ fn reissue_exec(
     // sort outputs by output_number
     output_dbcs.sort_by_key(|d| d.content.output_number);
 
+    // for each output, construct DbcOwned and display
     for dbc in output_dbcs.iter() {
         let pubkeyset = outputs_pks
             .get(&dbc.content.hash())
