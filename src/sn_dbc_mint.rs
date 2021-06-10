@@ -401,17 +401,21 @@ fn decode_input() -> Result<()> {
             let pks: PublicKeySet = from_be_bytes(&bytes)?;
             println!("\n\n-- Start PublicKeySet --");
             println!(
-                "threshold: {} ({} signature shares required)\n",
+                "  threshold: {} ({} signature shares required)\n",
                 pks.threshold(),
                 pks.threshold() + 1
             );
-            println!("public_key: {}", encode(&pks.public_key().to_bytes()));
+            println!("  public_key: {}", encode(&pks.public_key().to_bytes()));
             // temporary: the 2nd line matches ian coleman's bls tool output.  but why not the first?
             //            println!("PublicKeyShare[0]: {}", to_be_hex(&pks.public_key_share(0))? );
-            println!(
-                "PublicKeyShare[0]: {}",
-                encode(&pks.public_key_share(0).to_bytes())
-            );
+            println!("\n  PublicKeyShares:");
+            for i in 0..pks.threshold() + 1 {
+                println!(
+                    "    {} : {}",
+                    i,
+                    encode(&pks.public_key_share(i).to_bytes())
+                );
+            }
             println!("-- End PublicKeySet --\n");
         }
         "sks" => {
@@ -419,26 +423,30 @@ fn decode_input() -> Result<()> {
             let sks = SecretKeySet::from(poly);
             println!("\n\n-- Start SecretKeySet --");
             println!(
-                "threshold: {} ({} signature shares required)\n",
+                "  threshold: {} ({} signature shares required)\n",
                 sks.threshold(),
                 sks.threshold() + 1
             );
-            println!(
-                "SecretKeyShare[0]: {}",
-                encode(sks_to_bytes(&sks.secret_key_share(0))?)
-            );
+            println!("\n  SecretKeyShares:");
+            for i in 0..sks.threshold() + 1 {
+                println!(
+                    "    {} : {}",
+                    i,
+                    encode(sks_to_bytes(&sks.secret_key_share(i))?)
+                );
+            }
             println!("-- End SecretKeySet --\n");
         }
         "rt" => println!(
-            "\n\n-- ReissueTransaction -- {:#?}",
+            "\n\n-- ReissueTransaction --\n\n{:#?}",
             from_be_bytes::<ReissueTransactionOwned>(&bytes)?
         ),
         "s" => println!(
-            "\n\n-- SignatureSharesMap -- {:#?}",
+            "\n\n-- SignatureSharesMap --\n\n{:#?}",
             from_be_bytes::<SignatureSharesMap>(&bytes)?
         ),
         "rr" => println!(
-            "\n\n-- ReissueRequest -- {:#?}",
+            "\n\n-- ReissueRequest --\n\n{:#?}",
             from_be_bytes::<ReissueRequestOwned>(&bytes)?
         ),
         _ => println!("Unknown type!"),
