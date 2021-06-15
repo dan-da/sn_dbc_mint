@@ -25,6 +25,149 @@ use threshold_crypto::serde_impl::SerdeSecret;
 use threshold_crypto::{
     PublicKey, PublicKeySet, SecretKeySet, SecretKeyShare, Signature, SignatureShare,
 };
+use structopt::StructOpt;
+
+#[derive(Debug)]
+struct DbcInput {
+    dbc: DbcOwned,
+}
+
+impl std::str::FromStr for DbcInput {
+    type Err = anyhow::Error;
+    fn from_str(str: &str) -> Result<Self> {
+        let dbc: DbcOwned = from_be_hex(str)?;
+        Ok(Self {dbc})
+    }
+}
+
+#[derive(Debug)]
+struct DbcOutput {
+    public_key_set: PublicKeySet,
+    amount: u64,
+}
+
+impl std::str::FromStr for DbcOutput {
+    type Err = anyhow::Error;
+    fn from_str(str: &str) -> Result<Self> {
+        let parts: Vec<&str> = str.split(',').collect();
+
+        let public_key_set: PublicKeySet = from_be_hex(parts[0])?;
+        let amount: u64 = parts[1].parse()?;
+        Ok(Self {public_key_set, amount})
+    }
+}
+
+#[derive(Debug)]
+struct SecretKeyShareInput {
+    input_index: usize,
+    key_index: usize,
+    sks: SecretKeyShare,
+}
+
+impl std::str::FromStr for SecretKeyShareInput {
+    type Err = anyhow::Error;
+    fn from_str(str: &str) -> Result<Self> {
+        let parts: Vec<&str> = str.split(':').collect();
+        let input_index: usize = parts[0].parse()?;
+        let key_index: usize = parts[1].parse()?;
+        let sks: SecretKeyShare = from_be_hex(parts[2])?;
+        Ok( Self {
+            input_index,
+            key_index,
+            sks,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct DbcSecretKeyShareInput {
+    dbc: DbcOwned,
+    secret_key_shares: BTreeMap<usize, SecretKeyShare>,
+}
+
+impl std::str::FromStr for DbcSecretKeyShareInput {
+    type Err = anyhow::Error;
+    fn from_str(str: &str) -> Result<Self> {
+        let parts: Vec<&str> = str.splitn(2, ':').collect();
+        let dbc: DbcOwned = from_be_hex(parts[0])?;
+        let mut secret_key_shares: BTreeMap<usize, SecretKeyShare> = Default::default();
+        for share in parts[1].split(':') {
+            let s: Vec<&str> = share.split(',').collect();
+            let sks = from_be_hex(s[0])?;
+            let idx = s[1].parse::<usize>()?;
+            secret_key_shares.insert(idx, sks);
+        }
+
+        Ok( Self {
+            dbc,
+            secret_key_shares,
+        })
+    }
+}
+
+/// Available commands
+#[derive(Debug, StructOpt)]
+enum Command {
+    #[structopt(name = "help")]
+    /// Help
+    Help,
+    #[structopt(name = "prepare-tx")]
+    /// Prepare Tx
+    PrepareTx {
+        #[structopt(short, long, required(true))]
+        /// Input DBC(s)
+        input: Vec<DbcInput>,
+        #[structopt(short, long, required(true))]
+        /// Output(s) format: PublicKeySet,Amount
+        output: Vec<DbcOutput>,
+    },
+    #[structopt(name = "sign-tx")]
+    /// Sign Tx
+    SignTx {
+        #[structopt(short, long, required(true))]
+        /// ReissueTransaction, from prepare_tx
+        tx: ReissueTransactionOwned,
+        #[structopt(short, long, required(true))]
+        /// SecretKeyShare(s).  format: DbcIndex:ShareIndex:SecretKeyShare
+        secret_key_share: Vec<SecretKeyShareInput>,
+    },
+    #[structopt(name = "prepare-reissue")]
+    /// Prepare Reissue
+    PrepareReissue {
+        #[structopt(short, long, required(true))]
+        /// ReissueTransaction, from prepare_tx
+        tx: ReissueTransactionOwned,
+        #[structopt(short, long, required(true))]
+        /// SignatureShareMap, from sign_tx
+        signature_share_map: Vec<SignatureSharesMap>,
+    },
+    #[structopt(name = "reissue")]
+    /// Reissue
+    Reissue {
+        /// ReissueRequest, from prepare-reissue
+        reissue_request: ReissueRequestOwned,
+    },
+    #[structopt(name = "reissue-ez")]
+    /// ReissueEz
+    ReissueEz {
+        #[structopt(short, long, required(true))]
+        /// Input(s). format: Dbc:SecretKeyShare,ShareIndex[:SecretKeyShare,ShareIndex]...
+        input: Vec<DbcSecretKeyShareInput>,
+        #[structopt(short, long, required(true))]
+        /// Output(s). format: PublicKeySet,Amount
+        output: Vec<DbcOutput>,
+    },
+    #[structopt(name = "decode")]
+    /// Decode
+    Decode,
+}
+
+#[derive(Debug, StructOpt)]
+#[structopt(global_settings(&[structopt::clap::AppSettings::ColoredHelp]))]
+struct CliArgs {
+    #[structopt(subcommand)]
+    command: Option<Command>,
+}
 
 /// Holds information about the Mint, which may be comprised
 /// of 1 or more nodes.
@@ -59,6 +202,14 @@ struct ReissueTransactionOwned {
     outputs_owners: HashMap<Hash, PublicKeySet>,
 }
 
+impl std::str::FromStr for ReissueTransactionOwned {
+    type Err = anyhow::Error;
+    fn from_str(str: &str) -> Result<Self> {
+        from_be_hex(str)
+    }
+}
+
+
 /// A ReissueRequest with pubkey set for all the input and output Dbcs
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ReissueRequestOwned {
@@ -67,16 +218,58 @@ struct ReissueRequestOwned {
     outputs_owners: HashMap<Hash, PublicKeySet>,
 }
 
+impl std::str::FromStr for ReissueRequestOwned {
+    type Err = anyhow::Error;
+    fn from_str(str: &str) -> Result<Self> {
+        from_be_hex(str)
+    }
+}
+
 /// This type is just for serializing HashMap<Hash, <HashMap<usize, SignatureShare>>
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct SignatureSharesMap(HashMap<Hash, HashMap<usize, SignatureShare>>);
 
+impl std::str::FromStr for SignatureSharesMap {
+    type Err = anyhow::Error;
+    fn from_str(str: &str) -> Result<Self> {
+        from_be_hex(str)
+    }
+}
+
+
 /// program entry point and interactive command handler.
 fn main() -> Result<()> {
-    print_logo();
-    println!("Type 'help' to get started.\n");
 
     let mut mintinfo: MintInfo = mk_new_random_mint(0, 1000)?;
+
+    let opt = CliArgs::from_args();
+    if let Some(ref cmd) = opt.command {
+        match cmd {
+            Command::PrepareTx {input, output} => {
+                prepare_tx_cli(input, output)?;
+            },
+            Command::SignTx {tx, secret_key_share} => {
+                sign_tx_cli(tx, secret_key_share)?;
+            },
+            Command::PrepareReissue {tx, signature_share_map} => {
+                prepare_reissue_cli(tx, signature_share_map)?;
+            },
+            Command::Reissue {reissue_request} => {
+                reissue_cli(&mut mintinfo, reissue_request)?;
+            },
+            Command::ReissueEz {input, output} => {
+                reissue_ez_cli(&mut mintinfo, input, output)?;
+            },
+            _ => {
+                println!("Command unimplemented.");
+                println!("{:?}", opt);
+            }
+        }
+        return Ok(());
+    }
+
+    print_logo();
+    println!("Type 'help' to get started.\n");
 
     let mut rl = Editor::<()>::new();
     rl.set_auto_add_history(true);
@@ -197,7 +390,7 @@ fn mk_new_mint(secret_key_set: SecretKeySet, poly: Poly, amount: u64) -> Result<
     // Make a list of (Index, SignatureShare) for combining sigs.
     let node_sigs: Vec<(u64, &SignatureShare)> = genesis_set
         .iter()
-        .map(|e| e.2 .1.threshold_crypto())
+        .map(|e| e.2.1.threshold_crypto())
         .collect();
 
     // Todo: in a true multi-node mint, each node would call issue_genesis_dbc(), then the aggregated
@@ -497,6 +690,96 @@ fn validate(mintinfo: &MintInfo) -> Result<()> {
 }
 
 /// Implements prepare_tx command.
+fn prepare_tx_cli(inputs_cli: &Vec<DbcInput>, outputs_cli: &Vec<DbcOutput>) -> Result<()> {
+
+//    let mut inputs: HashSet<Dbc> = Default::default();
+//    let mut inputs_owners: HashMap<Hash, PublicKeySet> = Default::default();
+
+    let inputs: HashSet<Dbc> = inputs_cli.iter().map(|d| d.dbc.inner.clone()).collect();
+    let inputs_owners = inputs_cli.iter().map(|d| (d.dbc.inner.name(), d.dbc.owner.clone())).collect();
+    let inputs_total: u64 = inputs_cli.iter().map(|d| d.dbc.inner.amount()).sum();
+
+    let input_hashes = inputs.iter().map(|e| e.name()).collect::<BTreeSet<_>>();
+
+    let v: Vec<(DbcContent, (Hash, PublicKeySet))> = outputs_cli.iter().enumerate().map(|(i, o)| {
+        let content = DbcContent::new(
+            input_hashes.clone(),     // parents
+            o.amount,                 // amount
+            i as u32,                        // output_number
+            o.public_key_set.public_key(), // public_key
+        );
+        (content.clone(), (content.hash(), o.public_key_set.clone()))
+    }).collect();
+
+    let outputs: HashSet<DbcContent> = v.iter().map(|e| e.0.clone()).collect();
+    let outputs_owners: HashMap<Hash, PublicKeySet> = v.iter().map(|e| e.1.clone()).collect();
+    let outputs_total: u64 = outputs.iter().map(|o| o.amount).sum();
+
+    if outputs.is_empty() {
+        return Err(anyhow!("No outputs specified.  Cancelling."));
+    }
+    if inputs_total - outputs_total != 0 {
+        return Err(anyhow!("Input DBC(s) not fully spent."));
+    }
+
+    let transaction = ReissueTransactionOwned {
+        inner: ReissueTransaction { inputs, outputs },
+        inputs_owners,
+        outputs_owners,
+    };
+
+    println!("\n-- ReissueTransaction --");
+    println!("{}", to_be_hex(&transaction)?);
+    println!("-- End ReissueTransaction --\n");
+
+    Ok(())
+}
+
+/// Implements prepare_tx command.
+fn sign_tx_cli(tx: &ReissueTransactionOwned, secret_key_shares: &Vec<SecretKeyShareInput>) -> Result<()> {
+
+    let mut inputs: HashMap<Dbc, HashMap<usize, SecretKeyShare>> = Default::default();
+
+    // Get from cli arg: (index, SecretKeyShare) for each input Dbc
+    for (i, dbc) in tx.inner.inputs.iter().enumerate() {
+
+        let pubkeyset = tx
+            .inputs_owners
+            .get(&dbc.name())
+            .ok_or_else(|| anyhow!("PubKeySet not found"))?;
+
+        let mut secrets: HashMap<usize, SecretKeyShare> = Default::default();
+        for sks in secret_key_shares.iter() {
+            if sks.input_index == i {
+                secrets.insert(sks.key_index, sks.sks.clone());
+            }
+        }
+
+        if secrets.len() < pubkeyset.threshold() + 1 {
+            return Err(anyhow!("Input DBC #{} requires {} SecretKeyShare but {} provided", i, pubkeyset.threshold()+1, secrets.len()));
+        }
+
+        inputs.insert(dbc.clone(), secrets);
+    }
+
+    let mut sig_shares: SignatureSharesMap = Default::default();
+    for (dbc, secrets) in inputs.iter() {
+        let mut sigs: HashMap<usize, SignatureShare> = Default::default();
+        for (idx, secret) in secrets.iter() {
+            let sig_share = secret.sign(&tx.inner.blinded().hash());
+            sigs.insert(*idx, sig_share);
+        }
+        sig_shares.0.insert(dbc.name(), sigs);
+    }
+
+    println!("\n-- SignatureSharesMap --");
+    println!("{}", to_be_hex(&sig_shares)?);
+    println!("-- End SignatureSharesMap --\n");
+
+    Ok(())
+}
+
+/// Implements prepare_tx command.
 fn prepare_tx() -> Result<()> {
     let mut inputs: HashSet<Dbc> = Default::default();
     let mut inputs_owners: HashMap<Hash, PublicKeySet> = Default::default();
@@ -658,6 +941,81 @@ fn sign_tx() -> Result<()> {
     Ok(())
 }
 
+/// Implements prepare_reissue (cli) command.
+fn prepare_reissue_cli(tx: &ReissueTransactionOwned, ss_maps: &Vec<SignatureSharesMap> ) -> Result<()> {
+    let mut sig_shares_by_input: HashMap<Hash, BTreeMap<usize, SignatureShare>> =
+        Default::default();
+
+    // Get from user: SignatureSharesMap(s) for each tx input
+    //                until required # of SignatureShare obtained.
+    for (i, dbc) in tx.inner.inputs.iter().enumerate() {
+
+        let pubkeyset = tx
+            .inputs_owners
+            .get(&dbc.name())
+            .ok_or_else(|| anyhow!("PubKeySet not found"))?;
+
+        for shares_map in ss_maps.iter() {
+            for (name, shares) in shares_map.0.iter() {
+                if *name == dbc.name() {
+                    for (idx, share) in shares.iter() {
+                        let list = sig_shares_by_input
+                            .entry(*name)
+                            .or_insert_with(BTreeMap::default);
+                        (*list).insert(*idx, share.clone());
+                    }
+                }
+            }
+        }
+        let found = match sig_shares_by_input.get(&dbc.name()) {
+            Some(list) => list.len(),
+            None => 0,
+        };
+
+        if found < pubkeyset.threshold() + 1 {
+            return Err(anyhow!("Input DBC #{} requires {} SignatureShare but {} provided", i, pubkeyset.threshold()+1, found))
+        }
+    }
+
+    let mut proofs: HashMap<Hash, (PublicKey, Signature)> = Default::default();
+    for dbc in tx.inner.inputs.iter() {
+        let shares = match sig_shares_by_input.get(&dbc.name()) {
+            Some(s) => s,
+            None => {
+                return Err(anyhow!(
+                    "Signature Shares not found for input Dbc {}",
+                    encode(&dbc.name())
+                ))
+            }
+        };
+        let pubkeyset = tx
+            .inputs_owners
+            .get(&dbc.name())
+            .ok_or_else(|| anyhow!("PubKeySet not found"))?;
+
+        let sig = pubkeyset
+            .combine_signatures(shares)
+            .map_err(|e| Error::msg(format!("{}", e)))?;
+        proofs.insert(dbc.name(), (pubkeyset.public_key(), sig));
+    }
+
+    let reissue_request = ReissueRequestOwned {
+        inner: ReissueRequest {
+            transaction: tx.inner.clone(),
+            input_ownership_proofs: proofs,
+        },
+        inputs_owners: tx.inputs_owners.clone(),
+        outputs_owners: tx.outputs_owners.clone(),
+    };
+
+    println!("\n-- ReissueRequest --");
+    println!("{}", to_be_hex(&reissue_request)?);
+    println!("-- End ReissueRequest --\n");
+
+    Ok(())
+}
+
+
 /// Implements prepare_reissue command.
 fn prepare_reissue() -> Result<()> {
     let tx_input = readline_prompt_nl("\nReissueTransaction: ")?;
@@ -744,6 +1102,26 @@ fn prepare_reissue() -> Result<()> {
 }
 
 /// Implements reissue command.
+fn reissue_cli(mintinfo: &mut MintInfo, rr: &ReissueRequestOwned) -> Result<()> {
+
+    let input_hashes = rr
+        .inner
+        .transaction
+        .inputs
+        .iter()
+        .map(|e| e.name())
+        .collect::<BTreeSet<_>>();
+
+    reissue_exec(
+        mintinfo,
+        &rr.inner,
+        &input_hashes,
+        &rr.outputs_owners,
+    )
+}
+
+
+/// Implements reissue command.
 fn reissue(mintinfo: &mut MintInfo) -> Result<()> {
     let mr_input = readline_prompt_nl("\nReissueRequest: ")?;
     let reissue_request: ReissueRequestOwned = from_be_hex(&mr_input)?;
@@ -765,6 +1143,66 @@ fn reissue(mintinfo: &mut MintInfo) -> Result<()> {
         &reissue_request.outputs_owners,
     )
 }
+
+/// Implements reissue_ez command.
+fn reissue_ez_cli(mintinfo: &mut MintInfo, inputs_cli: &Vec<DbcSecretKeyShareInput>, outputs_cli: &Vec<DbcOutput>) -> Result<()> {
+
+    let inputs_total: u64 = inputs_cli.iter().map(|d| d.dbc.inner.amount()).sum();
+    let input_hashes = inputs_cli.iter().map(|e| e.dbc.inner.name()).collect::<BTreeSet<_>>();
+
+    let v: Vec<(DbcContent, (Hash, PublicKeySet))> = outputs_cli.iter().enumerate().map(|(i, o)| {
+        let content = DbcContent::new(
+            input_hashes.clone(),     // parents
+            o.amount,                 // amount
+            i as u32,                        // output_number
+            o.public_key_set.public_key(), // public_key
+        );
+        (content.clone(), (content.hash(), o.public_key_set.clone()))
+    }).collect();
+
+    let outputs: HashSet<DbcContent> = v.iter().map(|e| e.0.clone()).collect();
+    let outputs_owners: HashMap<Hash, PublicKeySet> = v.iter().map(|e| e.1.clone()).collect();
+    let outputs_total: u64 = outputs.iter().map(|o| o.amount).sum();
+
+    if outputs.is_empty() {
+        println!("\n\nNo outputs specified.  Cancelling.\n\n");
+        return Ok(());
+    }
+    if inputs_total - outputs_total != 0 {
+        println!("\n\nInput DBC(s) not fully spent. Cancelling.\n\n");
+        return Ok(());
+    }
+
+    let tx_inputs: HashSet<Dbc> = inputs_cli.iter().map(|d| d.dbc.inner.clone()).collect();
+    let transaction = ReissueTransaction {
+        inputs: tx_inputs,
+        outputs,
+    };
+
+    // for each input Dbc, combine owner's SignatureShare(s) to obtain owner's Signature
+    let mut proofs: HashMap<Hash, (PublicKey, Signature)> = Default::default();
+    for input in inputs_cli.iter() {
+        let mut sig_shares: BTreeMap<usize, SignatureShare> = Default::default();
+        for (index, sks) in input.secret_key_shares.iter() {
+            let sig_share = sks.sign(&transaction.blinded().hash());
+            sig_shares.insert(*index, sig_share.clone());
+        }
+        let sig = input.dbc
+            .owner
+            .combine_signatures(&sig_shares)
+            .map_err(|e| anyhow!(e))?;
+        proofs.insert(input.dbc.inner.name(), (input.dbc.owner.public_key(), sig));
+    }
+
+    let reissue_request = ReissueRequest {
+        transaction,
+        //        input_ownership_proofs: HashMap::from_iter(vec![(mintinfo.genesis.name(), sig)]),
+        input_ownership_proofs: proofs,
+    };
+
+    reissue_exec(mintinfo, &reissue_request, &input_hashes, &outputs_owners)
+}
+
 
 /// Implements reissue_ez command.
 fn reissue_ez(mintinfo: &mut MintInfo) -> Result<()> {
