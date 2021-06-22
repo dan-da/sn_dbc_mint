@@ -26,6 +26,7 @@ use threshold_crypto::{
 };
 
 use preferences_ron::{AppInfo, Preferences};
+use serde_json;
 
 const APP_INFO: AppInfo = AppInfo {
     name: "mint-cli",
@@ -374,7 +375,12 @@ fn newmint_cli(
         }
     };
 
-    println!("\nMint created!\n");
+    let json = serde_json::json!({
+        "success": true,
+        "msg": "Mint created",
+    });
+
+    println!("{}", serde_json::to_string_pretty(&json)?);
 
     Ok(mintinfo)
 }
@@ -443,114 +449,120 @@ fn newkey_cli(num_signers: usize) -> Result<()> {
     // Get poly and SecretKeySet from user, or make new random
     let (poly, sks) = mk_secret_key_set(num_signers - 1)?;
 
-    println!("\n -- Poly Hex --\n  {}", to_be_hex(&poly)?);
+    let sks_val = secret_key_set_to_json(&sks, &poly, false)?;
+    let pks_val = public_key_set_to_json(&sks.public_keys())?;
 
-    // poly.commitment() is the same as the PublicKeySet returned from sks.public_keys()
-    // println!("Commitment Hex: {}", to_be_hex(&poly.commitment())?);
+    let mut root = serde_json::Map::new();
+    root.insert("secret_key_set".to_string(), sks_val);
+    root.insert("public_key_set".to_string(), pks_val);
 
-    println!("\n -- SecretKeyShares --");
-    for i in (0..sks.threshold() + 5).into_iter() {
-        println!(
-            "  {}. {}",
-            i,
-            encode(&sks_to_bytes(&sks.secret_key_share(i))?)
-        );
-    }
-
-    println!("\n -- PublicKeyShares --");
-    for i in (0..sks.threshold() + 5).into_iter() {
-        // the 2nd line matches ian coleman's bls tool output.  but why not the first?
-        //        println!("  {}. {}", i, to_be_hex::<PublicKeyShare>(&sks.public_keys().public_key_share(i))?);
-        println!(
-            "  {}. {}",
-            i,
-            encode(&sks.public_keys().public_key_share(i).to_bytes())
-        );
-    }
-
-    println!(
-        "\n -- PublicKeySet --\n{}\n",
-        to_be_hex(&sks.public_keys())?
-    );
-
-    println!(
-        "\nSigning Threshold: {}  ({} signers required)\n",
-        sks.threshold(),
-        sks.threshold() + 1
-    );
+    let json = jmap(root);
+    println!("{}", serde_json::to_string_pretty(&json)?);
 
     Ok(())
 }
+
+fn secret_key_set_to_json(sks: &SecretKeySet, poly: &Poly, show_pks: bool) -> Result<serde_json::Value> {
+    let mut map = serde_json::Map::new();
+
+    map.insert("poly".to_string(), jstr(to_be_hex(&poly)?));
+    map.insert("threshold".to_string(), jusize(sks.threshold()) );
+    map.insert("required_signers".to_string(), jusize(sks.threshold()+1) );
+
+    if show_pks {
+        map.insert("public_key_set".to_string(), jstr(to_be_hex(&sks.public_keys())?));
+    }
+
+    map.insert("secret_key_shares".to_string(), secret_key_shares_to_json(sks)?);
+
+    Ok(jmap(map))
+}
+
+fn public_key_set_to_json(pks: &PublicKeySet) -> Result<serde_json::Value> {
+    let mut map = serde_json::Map::new();
+
+    map.insert("public_key_set".to_string(), jstr(to_be_hex(&pks)?));
+    map.insert("threshold".to_string(), jusize(pks.threshold()) );
+    map.insert("required_signers".to_string(), jusize(pks.threshold()+1) );
+
+    map.insert("public_key_shares".to_string(), public_key_shares_to_json(pks)?);
+
+    Ok(jmap(map))
+}
+
+fn secret_key_shares_to_json(sks: &SecretKeySet) -> Result<serde_json::Value> {
+    let mut sec_shares = serde_json::Map::new();
+
+    //println!("\n -- PublicKeyShares --");
+    for i in (0..sks.threshold() + 5).into_iter() {
+        sec_shares.insert(i.to_string(), jstr(encode(&sks_to_bytes(&sks.secret_key_share(i))?)));
+    }
+    Ok(jmap(sec_shares))
+}
+
+
+fn public_key_shares_to_json(pks: &PublicKeySet) -> Result<serde_json::Value> {
+    let mut pub_shares = serde_json::Map::new();
+
+    //println!("\n -- PublicKeyShares --");
+    for i in (0..pks.threshold() + 5).into_iter() {
+        pub_shares.insert(i.to_string(), jstr(encode(&pks.public_key_share(i).to_bytes())));
+    }
+    Ok(jmap(pub_shares))
+}
+
+fn jstr(s: String) -> serde_json::Value {
+    serde_json::Value::String(s)
+}
+
+fn ju64(n: u64) -> serde_json::Value {
+    serde_json::Value::Number(serde_json::Number::from(n))
+}
+
+fn ju32(n: u32) -> serde_json::Value {
+    serde_json::Value::Number(serde_json::Number::from(n))
+}
+
+fn jusize(n: usize) -> serde_json::Value {
+    serde_json::Value::Number(serde_json::Number::from(n))
+}
+
+fn jvec(v: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::Value::Array(v)
+}
+
+fn jmap(m: serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
+    serde_json::Value::Object(m)
+}
+
 
 /// Displays mint information in human readable form
 fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
-    println!();
 
-    println!("Number of Mint Nodes: {}\n", mintinfo.mintnodes.len());
+    let sks_val = secret_key_set_to_json(&mintinfo.secret_key_set(), &mintinfo.poly, false)?;
+    let pks_val = public_key_set_to_json(&mintinfo.secret_key_set().public_keys())?;
 
-    println!("-- Mint Keys --\n");
-    println!("SecretKeySet (Poly): {}\n", to_be_hex(&mintinfo.poly)?);
+    let mut spendbook: Vec<serde_json::Value> = Default::default();
 
-    println!(
-        "PublicKeySet: {}\n",
-        to_be_hex(&mintinfo.secret_key_set().public_keys())?
-    );
-
-    println!("\n   -- SecretKeyShares --");
-    for i in (0..mintinfo.secret_key_set().threshold() + 2).into_iter() {
-        println!(
-            "    {}. {}",
-            i,
-            encode(&sks_to_bytes(
-                &mintinfo.secret_key_set().secret_key_share(i)
-            )?)
-        );
-    }
-
-    println!("\n   -- PublicKeyShares --");
-    for i in (0..mintinfo.secret_key_set().threshold() + 2).into_iter() {
-        // the 2nd line matches ian coleman's bls tool output.  but why not the first?
-        //        println!("  {}. {}", i, to_be_hex::<PublicKeyShare>(&sks.public_keys().public_key_share(i))?);
-        println!(
-            "    {}. {}",
-            i,
-            encode(
-                &mintinfo
-                    .secret_key_set()
-                    .public_keys()
-                    .public_key_share(i)
-                    .to_bytes()
-            )
-        );
-    }
-
-    println!(
-        "\n   Required Signers: {}   (Threshold = {})",
-        mintinfo.secret_key_set().threshold() + 1,
-        mintinfo.secret_key_set().threshold()
-    );
-
-    println!("\n-- Genesis DBC --\n");
-    print_dbc_human(&mintinfo.genesis, true)?;
-
-    println!("\n");
-
-    println!("-- SpendBook --\n");
     for (dbchash, _tx) in mintinfo.mintnode()?.spendbook.transactions.iter() {
-        println!("  {}", encode(&dbchash));
+        spendbook.push(jstr(encode(&dbchash)));
     }
 
-    println!();
+    let mut root = serde_json::Map::new();
+    root.insert("mint_nodes".to_string(), jusize(mintinfo.mintnodes.len()));
+    root.insert("secret_key_set".to_string(), sks_val);
+    root.insert("public_key_set".to_string(), pks_val);
+    root.insert("genesis_dbc".to_string(), dbc_to_json(&mintinfo.genesis, true)?);
+    root.insert("spendbook".to_string(), jvec(spendbook));
+
+    let json = jmap(root);
+    println!("{}", serde_json::to_string_pretty(&json)?);
 
     Ok(())
 }
 
-/// displays Dbc in human readable form
-fn print_dbc_human(dbc: &DbcUnblinded, outputs: bool) -> Result<()> {
-    println!("id: {}\n", encode(dbc.inner.name()));
-    println!("amount: {}\n", dbc.inner.content.amount);
-    println!("output_number: {}\n", dbc.inner.content.output_number);
-    println!("owner: {}\n", to_be_hex(&dbc.owner)?);
+/// encodes Dbc as serde_json::Value
+fn dbc_to_json(dbc: &DbcUnblinded, outputs: bool) -> Result<serde_json::Value> {
 
     // dbc.content.parents and dbc.transaction.inputs seem to be the same
     // so for now we are just displaying the latter.
@@ -559,91 +571,63 @@ fn print_dbc_human(dbc: &DbcUnblinded, outputs: bool) -> Result<()> {
     //     println!("  {}", encode(p))
     // }
 
-    println!("inputs:");
-    for i in &dbc.inner.transaction.inputs {
-        println!("  {}", encode(i))
+    let mut inputs = serde_json::Map::new();
+
+    for (i, input) in dbc.inner.transaction.inputs.iter().enumerate() {
+        inputs.insert(i.to_string(), jstr(encode(input)));
     }
+
+    let mut root = serde_json::Map::new();
+
+    root.insert("id".to_string(), jstr(encode(dbc.inner.name())));
+    root.insert("amount".to_string(), ju64(dbc.inner.content.amount));
+    root.insert("output_number".to_string(), ju32(dbc.inner.content.output_number));
+    root.insert("owner".to_string(), jstr(to_be_hex(&dbc.owner)?));
+    root.insert("inputs".to_string(), jmap(inputs));
 
     if outputs {
-        println!("\noutputs:");
-        for i in &dbc.inner.transaction.outputs {
-            println!("  {}", encode(i))
+        let mut outputs = serde_json::Map::new();
+        for (i, output) in dbc.inner.transaction.outputs.iter().enumerate() {
+            outputs.insert(i.to_string(), jstr(encode(output)));
         }
+        root.insert("outputs".to_string(), jmap(outputs));
     }
 
-    println!("\nData:");
-    println!("{}", to_be_hex(&dbc)?);
-    Ok(())
+    root.insert("data".to_string(), jstr(to_be_hex(&dbc)?));
+
+    Ok(jmap(root))
 }
 
 /// handles decode command.  
 fn decode_cli(data_type: &str, data: &str) -> Result<()> {
     let bytes = decode(data)?;
 
-    match data_type {
+    let jval = match data_type {
         "d" => {
-            println!("\n\n-- Start DBC --\n");
-            print_dbc_human(&from_be_bytes(&bytes)?, true)?;
-            println!("-- End DBC --\n");
+            dbc_to_json(&from_be_bytes(&bytes)?, true)?
         }
         "pks" => {
             let pks: PublicKeySet = from_be_bytes(&bytes)?;
-            println!("\n\n-- Start PublicKeySet --");
-            println!(
-                "  threshold: {} ({} signature shares required)\n",
-                pks.threshold(),
-                pks.threshold() + 1
-            );
-            println!("  public_key: {}", encode(&pks.public_key().to_bytes()));
-            // temporary: the 2nd line matches ian coleman's bls tool output.  but why not the first?
-            //            println!("PublicKeyShare[0]: {}", to_be_hex(&pks.public_key_share(0))? );
-            println!("\n  PublicKeyShares:");
-            for i in 0..pks.threshold() + 1 {
-                println!(
-                    "    {} : {}",
-                    i,
-                    encode(&pks.public_key_share(i).to_bytes())
-                );
-            }
-            println!("-- End PublicKeySet --\n");
+            public_key_set_to_json(&pks)?
         }
         "sks" => {
             let poly: Poly = from_be_bytes(&bytes)?;
-            let sks = SecretKeySet::from(poly);
-            println!("\n\n-- Start SecretKeySet --");
-            println!(
-                "  threshold: {} ({} signature shares required)\n",
-                sks.threshold(),
-                sks.threshold() + 1
-            );
-            println!("\n  SecretKeyShares:");
-            for i in 0..sks.threshold() + 1 {
-                println!(
-                    "    {} : {}",
-                    i,
-                    encode(sks_to_bytes(&sks.secret_key_share(i))?)
-                );
-            }
-            println!("-- End SecretKeySet --\n");
-
-            println!("-- PublicKeySet --");
-            println!("{}", to_be_hex(&sks.public_keys())?);
+            let sks = SecretKeySet::from(poly.clone());
+            secret_key_set_to_json(&sks, &poly, true)?
         }
-        "rt" => println!(
-            "\n\n-- ReissueTransaction --\n\n{:#?}",
-            from_be_bytes::<ReissueTransactionUnblinded>(&bytes)?
-        ),
-        "s" => println!(
-            "\n\n-- SignatureSharesMap --\n\n{:#?}",
-            from_be_bytes::<SignatureSharesMap>(&bytes)?
-        ),
-        "rr" => println!(
-            "\n\n-- ReissueRequest --\n\n{:#?}",
-            from_be_bytes::<ReissueRequestUnblinded>(&bytes)?
-        ),
-        _ => println!("Unknown type!"),
-    }
-    println!();
+        "rt" => {
+            jstr(format!("{:#?}", from_be_bytes::<ReissueTransactionUnblinded>(&bytes)?))
+        },
+        "s" => {
+            jstr(format!("{:#?}", from_be_bytes::<SignatureSharesMap>(&bytes)?))
+        },
+        "rr" => {
+            jstr(format!("{:#?}", from_be_bytes::<ReissueRequestUnblinded>(&bytes)?))
+        },
+        _ => jstr("Unknown type!".to_string()),
+    };
+
+    println!("{}", serde_json::to_string_pretty(&jval)?);
 
     Ok(())
 }
@@ -651,13 +635,20 @@ fn decode_cli(data_type: &str, data: &str) -> Result<()> {
 /// Implements validate command.  Validates signatures and that a
 /// DBC has not been double-spent.  Also checks if spent/unspent.
 fn validate_cli(mintinfo: &MintInfo, dbc: &DbcUnblinded) -> Result<()> {
-    match dbc.inner.confirm_valid(mintinfo.mintnode()?.key_cache()) {
+    let (status, desc) = match dbc.inner.confirm_valid(mintinfo.mintnode()?.key_cache()) {
         Ok(_) => match mintinfo.mintnode()?.is_spent(dbc.inner.name()) {
-            true => println!("\nThis DBC is unspendable.  (valid but has already been spent)\n"),
-            false => println!("\nThis DBC is spendable.   (valid and has not been spent)\n"),
+            true => ("spent", "valid but has already been spent".to_string()),
+            false => ("spendable", "valid and has not been spent".to_string()),
         },
-        Err(e) => println!("\nInvalid DBC.  {}", e.to_string()),
-    }
+        Err(e) => ("invalid", e.to_string()),
+    };
+
+    let json = serde_json::json!({
+        "status": status,
+        "desc": desc,
+    });
+
+    println!("{}", serde_json::to_string_pretty(&json)?);
 
     Ok(())
 }
@@ -707,9 +698,12 @@ fn prepare_tx_cli(inputs_cli: &[DbcUnblinded], outputs_cli: &[DbcOutput]) -> Res
         outputs_owners,
     };
 
-    println!("\n-- ReissueTransaction --");
-    println!("{}", to_be_hex(&transaction)?);
-    println!("-- End ReissueTransaction --\n");
+    let json = serde_json::json!({
+        "data_type": "ReissueTransaction",
+        "data": to_be_hex(&transaction)?,
+    });
+
+    println!("{}", serde_json::to_string_pretty(&json)?);
 
     Ok(())
 }
@@ -757,9 +751,12 @@ fn sign_tx_cli(
         sig_shares.0.insert(dbc.name(), sigs);
     }
 
-    println!("\n-- SignatureSharesMap --");
-    println!("{}", to_be_hex(&sig_shares)?);
-    println!("-- End SignatureSharesMap --\n");
+    let json = serde_json::json!({
+        "data_type": "SignatureSharesMap",
+        "data": to_be_hex(&sig_shares)?,
+    });
+
+    println!("{}", serde_json::to_string_pretty(&json)?);
 
     Ok(())
 }
@@ -838,9 +835,12 @@ fn prepare_reissue_cli(
         outputs_owners: tx.outputs_owners.clone(),
     };
 
-    println!("\n-- ReissueRequest --");
-    println!("{}", to_be_hex(&reissue_request)?);
-    println!("-- End ReissueRequest --\n");
+    let json = serde_json::json!({
+        "data_type": "ReissueRequest",
+        "data": to_be_hex(&reissue_request)?,
+    });
+
+    println!("{}", serde_json::to_string_pretty(&json)?);
 
     Ok(())
 }
@@ -1015,6 +1015,8 @@ fn reissue_exec(
     // sort outputs by output_number
     output_dbcs.sort_by_key(|d| d.content.output_number);
 
+    let mut jdbcs: Vec<serde_json::Value> = Default::default();
+
     // for each output, construct DbcUnblinded and display
     for dbc in output_dbcs.iter() {
         let pubkeyset = outputs_pks
@@ -1025,10 +1027,14 @@ fn reissue_exec(
             owner: pubkeyset.clone(),
         };
 
-        println!("\n-- Begin DBC --");
-        print_dbc_human(&dbc_owned, false)?;
-        println!("-- End DBC --\n");
+        jdbcs.push(dbc_to_json(&dbc_owned, false)?);
     }
+
+    let json = serde_json::json!({
+        "desc": "List of output DBCs",
+        "outputs": jdbcs,
+    });
+    println!("{}", serde_json::to_string_pretty(&json)?);
 
     Ok(())
 }
