@@ -26,7 +26,6 @@ use threshold_crypto::{
 };
 
 use preferences_ron::{AppInfo, Preferences};
-use serde_json;
 
 const APP_INFO: AppInfo = AppInfo {
     name: "mint-cli",
@@ -327,7 +326,7 @@ fn main() -> Result<()> {
                 mintinfo.save(&APP_INFO, prefs_key)?;
             }
             Command::MintInfo => {
-                print_mintinfo_human(&mintinfo)?;
+                mintinfo_cli(&mintinfo)?;
             }
             Command::NewMint {
                 money_supply,
@@ -385,65 +384,6 @@ fn newmint_cli(
     Ok(mintinfo)
 }
 
-/// creates a new mint using a random seed.
-fn mk_new_random_mint(threshold: usize, amount: u64) -> Result<MintInfo> {
-    let (poly, secret_key_set) = mk_secret_key_set(threshold)?;
-    mk_new_mint(secret_key_set, poly, amount)
-}
-
-/// creates a new mint from an existing SecretKeySet that was seeded by poly.
-fn mk_new_mint(secret_key_set: SecretKeySet, poly: Poly, amount: u64) -> Result<MintInfo> {
-    let genesis_pubkey = secret_key_set.public_keys().public_key();
-    let mut mints: Vec<Mint> = Default::default();
-
-    // Generate each Mint node, and corresponding NodeSignature. (Index + SignatureShare)
-    let mut genesis_set: Vec<(DbcContent, DbcTransaction, (PublicKeySet, NodeSignature))> =
-        Default::default();
-    for i in 0..secret_key_set.threshold() as u64 + 1 {
-        let key_manager = KeyManager::new(
-            secret_key_set.public_keys().clone(),
-            (i, secret_key_set.secret_key_share(i).clone()),
-            genesis_pubkey,
-        );
-        let mut mint = Mint::new(key_manager);
-        genesis_set.push(mint.issue_genesis_dbc(amount)?);
-        mints.push(mint);
-    }
-
-    // Make a list of (Index, SignatureShare) for combining sigs.
-    let node_sigs: Vec<(u64, &SignatureShare)> = genesis_set
-        .iter()
-        .map(|e| e.2 .1.threshold_crypto())
-        .collect();
-
-    // Todo: in a true multi-node mint, each node would call issue_genesis_dbc(), then the aggregated
-    // signatures would be combined here, so this mk_new_mint fn would to be broken apart.
-    let genesis_sig = secret_key_set
-        .public_keys()
-        .combine_signatures(node_sigs)
-        .map_err(|e| anyhow!(e))?;
-
-    // Create the Genesis Dbc
-    let genesis_dbc = Dbc {
-        content: genesis_set[0].0.clone(),
-        transaction: genesis_set[0].1.clone(),
-        transaction_sigs: BTreeMap::from_iter(vec![(
-            sn_dbc::GENESIS_DBC_INPUT,
-            (genesis_pubkey, genesis_sig),
-        )]),
-    };
-
-    // Bob's your uncle.
-    Ok(MintInfo {
-        mintnodes: mints,
-        genesis: DbcUnblinded {
-            inner: genesis_dbc,
-            owner: secret_key_set.public_keys(),
-        },
-        poly,
-    })
-}
-
 /// handles newkey command. generates SecretKeySet from random seed or user-supplied seed.
 fn newkey_cli(num_signers: usize) -> Result<()> {
     // Get poly and SecretKeySet from user, or make new random
@@ -462,83 +402,8 @@ fn newkey_cli(num_signers: usize) -> Result<()> {
     Ok(())
 }
 
-fn secret_key_set_to_json(sks: &SecretKeySet, poly: &Poly, show_pks: bool) -> Result<serde_json::Value> {
-    let mut map = serde_json::Map::new();
-
-    map.insert("poly".to_string(), jstr(to_be_hex(&poly)?));
-    map.insert("threshold".to_string(), jusize(sks.threshold()) );
-    map.insert("required_signers".to_string(), jusize(sks.threshold()+1) );
-
-    if show_pks {
-        map.insert("public_key_set".to_string(), jstr(to_be_hex(&sks.public_keys())?));
-    }
-
-    map.insert("secret_key_shares".to_string(), secret_key_shares_to_json(sks)?);
-
-    Ok(jmap(map))
-}
-
-fn public_key_set_to_json(pks: &PublicKeySet) -> Result<serde_json::Value> {
-    let mut map = serde_json::Map::new();
-
-    map.insert("public_key_set".to_string(), jstr(to_be_hex(&pks)?));
-    map.insert("threshold".to_string(), jusize(pks.threshold()) );
-    map.insert("required_signers".to_string(), jusize(pks.threshold()+1) );
-
-    map.insert("public_key_shares".to_string(), public_key_shares_to_json(pks)?);
-
-    Ok(jmap(map))
-}
-
-fn secret_key_shares_to_json(sks: &SecretKeySet) -> Result<serde_json::Value> {
-    let mut sec_shares = serde_json::Map::new();
-
-    //println!("\n -- PublicKeyShares --");
-    for i in (0..sks.threshold() + 5).into_iter() {
-        sec_shares.insert(i.to_string(), jstr(encode(&sks_to_bytes(&sks.secret_key_share(i))?)));
-    }
-    Ok(jmap(sec_shares))
-}
-
-
-fn public_key_shares_to_json(pks: &PublicKeySet) -> Result<serde_json::Value> {
-    let mut pub_shares = serde_json::Map::new();
-
-    //println!("\n -- PublicKeyShares --");
-    for i in (0..pks.threshold() + 5).into_iter() {
-        pub_shares.insert(i.to_string(), jstr(encode(&pks.public_key_share(i).to_bytes())));
-    }
-    Ok(jmap(pub_shares))
-}
-
-fn jstr(s: String) -> serde_json::Value {
-    serde_json::Value::String(s)
-}
-
-fn ju64(n: u64) -> serde_json::Value {
-    serde_json::Value::Number(serde_json::Number::from(n))
-}
-
-fn ju32(n: u32) -> serde_json::Value {
-    serde_json::Value::Number(serde_json::Number::from(n))
-}
-
-fn jusize(n: usize) -> serde_json::Value {
-    serde_json::Value::Number(serde_json::Number::from(n))
-}
-
-fn jvec(v: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::Value::Array(v)
-}
-
-fn jmap(m: serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
-    serde_json::Value::Object(m)
-}
-
-
-/// Displays mint information in human readable form
-fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
-
+/// Displays mint information as json
+fn mintinfo_cli(mintinfo: &MintInfo) -> Result<()> {
     let sks_val = secret_key_set_to_json(&mintinfo.secret_key_set(), &mintinfo.poly, false)?;
     let pks_val = public_key_set_to_json(&mintinfo.secret_key_set().public_keys())?;
 
@@ -552,7 +417,10 @@ fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
     root.insert("mint_nodes".to_string(), jusize(mintinfo.mintnodes.len()));
     root.insert("secret_key_set".to_string(), sks_val);
     root.insert("public_key_set".to_string(), pks_val);
-    root.insert("genesis_dbc".to_string(), dbc_to_json(&mintinfo.genesis, true)?);
+    root.insert(
+        "genesis_dbc".to_string(),
+        dbc_to_json(&mintinfo.genesis, true)?,
+    );
     root.insert("spendbook".to_string(), jvec(spendbook));
 
     let json = jmap(root);
@@ -561,51 +429,12 @@ fn print_mintinfo_human(mintinfo: &MintInfo) -> Result<()> {
     Ok(())
 }
 
-/// encodes Dbc as serde_json::Value
-fn dbc_to_json(dbc: &DbcUnblinded, outputs: bool) -> Result<serde_json::Value> {
-
-    // dbc.content.parents and dbc.transaction.inputs seem to be the same
-    // so for now we are just displaying the latter.
-    // println!("parents:");
-    // for p in &dbc.content.parents {
-    //     println!("  {}", encode(p))
-    // }
-
-    let mut inputs = serde_json::Map::new();
-
-    for (i, input) in dbc.inner.transaction.inputs.iter().enumerate() {
-        inputs.insert(i.to_string(), jstr(encode(input)));
-    }
-
-    let mut root = serde_json::Map::new();
-
-    root.insert("id".to_string(), jstr(encode(dbc.inner.name())));
-    root.insert("amount".to_string(), ju64(dbc.inner.content.amount));
-    root.insert("output_number".to_string(), ju32(dbc.inner.content.output_number));
-    root.insert("owner".to_string(), jstr(to_be_hex(&dbc.owner)?));
-    root.insert("inputs".to_string(), jmap(inputs));
-
-    if outputs {
-        let mut outputs = serde_json::Map::new();
-        for (i, output) in dbc.inner.transaction.outputs.iter().enumerate() {
-            outputs.insert(i.to_string(), jstr(encode(output)));
-        }
-        root.insert("outputs".to_string(), jmap(outputs));
-    }
-
-    root.insert("data".to_string(), jstr(to_be_hex(&dbc)?));
-
-    Ok(jmap(root))
-}
-
 /// handles decode command.  
 fn decode_cli(data_type: &str, data: &str) -> Result<()> {
     let bytes = decode(data)?;
 
     let jval = match data_type {
-        "d" => {
-            dbc_to_json(&from_be_bytes(&bytes)?, true)?
-        }
+        "d" => dbc_to_json(&from_be_bytes(&bytes)?, true)?,
         "pks" => {
             let pks: PublicKeySet = from_be_bytes(&bytes)?;
             public_key_set_to_json(&pks)?
@@ -615,15 +444,18 @@ fn decode_cli(data_type: &str, data: &str) -> Result<()> {
             let sks = SecretKeySet::from(poly.clone());
             secret_key_set_to_json(&sks, &poly, true)?
         }
-        "rt" => {
-            jstr(format!("{:#?}", from_be_bytes::<ReissueTransactionUnblinded>(&bytes)?))
-        },
-        "s" => {
-            jstr(format!("{:#?}", from_be_bytes::<SignatureSharesMap>(&bytes)?))
-        },
-        "rr" => {
-            jstr(format!("{:#?}", from_be_bytes::<ReissueRequestUnblinded>(&bytes)?))
-        },
+        "rt" => jstr(format!(
+            "{:#?}",
+            from_be_bytes::<ReissueTransactionUnblinded>(&bytes)?
+        )),
+        "s" => jstr(format!(
+            "{:#?}",
+            from_be_bytes::<SignatureSharesMap>(&bytes)?
+        )),
+        "rr" => jstr(format!(
+            "{:#?}",
+            from_be_bytes::<ReissueRequestUnblinded>(&bytes)?
+        )),
         _ => jstr("Unknown type!".to_string()),
     };
 
@@ -1039,6 +871,65 @@ fn reissue_exec(
     Ok(())
 }
 
+/// creates a new mint using a random seed.
+fn mk_new_random_mint(threshold: usize, amount: u64) -> Result<MintInfo> {
+    let (poly, secret_key_set) = mk_secret_key_set(threshold)?;
+    mk_new_mint(secret_key_set, poly, amount)
+}
+
+/// creates a new mint from an existing SecretKeySet that was seeded by poly.
+fn mk_new_mint(secret_key_set: SecretKeySet, poly: Poly, amount: u64) -> Result<MintInfo> {
+    let genesis_pubkey = secret_key_set.public_keys().public_key();
+    let mut mints: Vec<Mint> = Default::default();
+
+    // Generate each Mint node, and corresponding NodeSignature. (Index + SignatureShare)
+    let mut genesis_set: Vec<(DbcContent, DbcTransaction, (PublicKeySet, NodeSignature))> =
+        Default::default();
+    for i in 0..secret_key_set.threshold() as u64 + 1 {
+        let key_manager = KeyManager::new(
+            secret_key_set.public_keys().clone(),
+            (i, secret_key_set.secret_key_share(i).clone()),
+            genesis_pubkey,
+        );
+        let mut mint = Mint::new(key_manager);
+        genesis_set.push(mint.issue_genesis_dbc(amount)?);
+        mints.push(mint);
+    }
+
+    // Make a list of (Index, SignatureShare) for combining sigs.
+    let node_sigs: Vec<(u64, &SignatureShare)> = genesis_set
+        .iter()
+        .map(|e| e.2 .1.threshold_crypto())
+        .collect();
+
+    // Todo: in a true multi-node mint, each node would call issue_genesis_dbc(), then the aggregated
+    // signatures would be combined here, so this mk_new_mint fn would to be broken apart.
+    let genesis_sig = secret_key_set
+        .public_keys()
+        .combine_signatures(node_sigs)
+        .map_err(|e| anyhow!(e))?;
+
+    // Create the Genesis Dbc
+    let genesis_dbc = Dbc {
+        content: genesis_set[0].0.clone(),
+        transaction: genesis_set[0].1.clone(),
+        transaction_sigs: BTreeMap::from_iter(vec![(
+            sn_dbc::GENESIS_DBC_INPUT,
+            (genesis_pubkey, genesis_sig),
+        )]),
+    };
+
+    // Bob's your uncle.
+    Ok(MintInfo {
+        mintnodes: mints,
+        genesis: DbcUnblinded {
+            inner: genesis_dbc,
+            owner: secret_key_set.public_keys(),
+        },
+        poly,
+    })
+}
+
 /// Makes a new random SecretKeySet
 fn mk_secret_key_set(threshold: usize) -> Result<(Poly, SecretKeySet)> {
     let mut rng = rand::thread_rng();
@@ -1105,4 +996,144 @@ fn big_endian_bytes_to_bincode_bytes(mut beb: Vec<u8>) -> Vec<u8> {
 fn bincode_bytes_to_big_endian_bytes(mut bb: Vec<u8>) -> Vec<u8> {
     bb.reverse();
     bb
+}
+
+/// Converts SecretKeySet to serde_json::Value
+fn secret_key_set_to_json(
+    sks: &SecretKeySet,
+    poly: &Poly,
+    show_pks: bool,
+) -> Result<serde_json::Value> {
+    let mut map = serde_json::Map::new();
+
+    map.insert("poly".to_string(), jstr(to_be_hex(&poly)?));
+    map.insert("threshold".to_string(), jusize(sks.threshold()));
+    map.insert("required_signers".to_string(), jusize(sks.threshold() + 1));
+
+    if show_pks {
+        map.insert(
+            "public_key_set".to_string(),
+            jstr(to_be_hex(&sks.public_keys())?),
+        );
+    }
+
+    map.insert(
+        "secret_key_shares".to_string(),
+        secret_key_shares_to_json(sks)?,
+    );
+
+    Ok(jmap(map))
+}
+
+// converts PublicKeySet to serde_json::Value
+fn public_key_set_to_json(pks: &PublicKeySet) -> Result<serde_json::Value> {
+    let mut map = serde_json::Map::new();
+
+    map.insert("public_key_set".to_string(), jstr(to_be_hex(&pks)?));
+    map.insert("threshold".to_string(), jusize(pks.threshold()));
+    map.insert("required_signers".to_string(), jusize(pks.threshold() + 1));
+
+    map.insert(
+        "public_key_shares".to_string(),
+        public_key_shares_to_json(pks)?,
+    );
+
+    Ok(jmap(map))
+}
+
+// converts SecretKeySet to serde_json::Value representing list of SecretKeyShare
+fn secret_key_shares_to_json(sks: &SecretKeySet) -> Result<serde_json::Value> {
+    let mut sec_shares = serde_json::Map::new();
+
+    //println!("\n -- PublicKeyShares --");
+    for i in (0..sks.threshold() + 5).into_iter() {
+        sec_shares.insert(
+            i.to_string(),
+            jstr(encode(&sks_to_bytes(&sks.secret_key_share(i))?)),
+        );
+    }
+    Ok(jmap(sec_shares))
+}
+
+// converts PublicKeySet to serde_json::Value representing list of PublicKeyShare
+fn public_key_shares_to_json(pks: &PublicKeySet) -> Result<serde_json::Value> {
+    let mut pub_shares = serde_json::Map::new();
+
+    //println!("\n -- PublicKeyShares --");
+    for i in (0..pks.threshold() + 5).into_iter() {
+        pub_shares.insert(
+            i.to_string(),
+            jstr(encode(&pks.public_key_share(i).to_bytes())),
+        );
+    }
+    Ok(jmap(pub_shares))
+}
+
+/// encodes Dbc as serde_json::Value
+fn dbc_to_json(dbc: &DbcUnblinded, outputs: bool) -> Result<serde_json::Value> {
+    // dbc.content.parents and dbc.transaction.inputs seem to be the same
+    // so for now we are just displaying the latter.
+    // println!("parents:");
+    // for p in &dbc.content.parents {
+    //     println!("  {}", encode(p))
+    // }
+
+    let mut inputs = serde_json::Map::new();
+
+    for (i, input) in dbc.inner.transaction.inputs.iter().enumerate() {
+        inputs.insert(i.to_string(), jstr(encode(input)));
+    }
+
+    let mut root = serde_json::Map::new();
+
+    root.insert("id".to_string(), jstr(encode(dbc.inner.name())));
+    root.insert("amount".to_string(), ju64(dbc.inner.content.amount));
+    root.insert(
+        "output_number".to_string(),
+        ju32(dbc.inner.content.output_number),
+    );
+    root.insert("owner".to_string(), jstr(to_be_hex(&dbc.owner)?));
+    root.insert("inputs".to_string(), jmap(inputs));
+
+    if outputs {
+        let mut outputs = serde_json::Map::new();
+        for (i, output) in dbc.inner.transaction.outputs.iter().enumerate() {
+            outputs.insert(i.to_string(), jstr(encode(output)));
+        }
+        root.insert("outputs".to_string(), jmap(outputs));
+    }
+
+    root.insert("data".to_string(), jstr(to_be_hex(&dbc)?));
+
+    Ok(jmap(root))
+}
+
+// converts String to serde_json::Value
+fn jstr(s: String) -> serde_json::Value {
+    serde_json::Value::String(s)
+}
+
+// converts u64 to serde_json::Value
+fn ju64(n: u64) -> serde_json::Value {
+    serde_json::Value::Number(serde_json::Number::from(n))
+}
+
+// converts u32 to serde_json::Value
+fn ju32(n: u32) -> serde_json::Value {
+    serde_json::Value::Number(serde_json::Number::from(n))
+}
+
+// converts usize to serde_json::Value
+fn jusize(n: usize) -> serde_json::Value {
+    serde_json::Value::Number(serde_json::Number::from(n))
+}
+
+// converts Vec<serde_json::Value> to serde_json::Value
+fn jvec(v: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::Value::Array(v)
+}
+
+// converts Map<String, serde_json::Value> to serde_json::Value
+fn jmap(m: serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
+    serde_json::Value::Object(m)
 }
