@@ -1,5 +1,5 @@
 [package]
-name = "sn_dbc_mint"
+name = "mint-cli"
 version = "0.1.0"
 description = "a simple P2P Mint (CLI) for interactively using DBC"
 authors = [ "dan-da@users.noreply.github.com" ]
@@ -9,8 +9,8 @@ edition = "2018"
 publish = false
 
 [[bin]]
-name = "sn_dbc_mint"
-path = "src/sn_dbc_mint.rs"
+name = "mint-cli"
+path = "src/mint-cli.rs"
 
 [dependencies]
 log = "~0.4.8"
@@ -28,8 +28,9 @@ hex = "0.4.3"
 structopt = "0.3.21"
 serde_derive = "1.0.126"
 preferences-ron = "2.0.0"
-sn_dbc = "1.6.6"
+#sn_dbc = "1.6.6"
 serde_json = {version="1.0.64", features=["preserve_order"]}
+sn_dbc = "1.6.8"
 
 
 

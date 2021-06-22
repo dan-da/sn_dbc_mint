@@ -12,9 +12,10 @@
 use anyhow::{anyhow, Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_derive as sd;
+use serde_json as json;
 use sn_dbc::{
-    Dbc, DbcContent, DbcTransaction, Hash, KeyManager, Mint, MintSignatures, NodeSignature,
-    ReissueRequest, ReissueTransaction,
+    Dbc, DbcContent, DbcTransaction, Hash, Mint, MintSignatures, NodeSignature, ReissueRequest,
+    ReissueTransaction, SimpleKeyManager as KeyManager, SimpleSigner as Signer,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::iter::FromIterator;
@@ -32,6 +33,7 @@ const APP_INFO: AppInfo = AppInfo {
     author: "Safe Network",
 };
 
+/// For obtaining a DBC output from the user via CLI arg.
 #[derive(Debug)]
 struct DbcOutput {
     public_key_set: PublicKeySet,
@@ -52,6 +54,7 @@ impl std::str::FromStr for DbcOutput {
     }
 }
 
+/// For obtaining a Poly (SecretKeySet seed) from the user via CLI arg.
 #[derive(Debug, Clone)]
 struct PolyInput {
     inner: Poly,
@@ -66,6 +69,7 @@ impl std::str::FromStr for PolyInput {
     }
 }
 
+/// For obtaining a SecretKeyShare+input idx+key idx from the user via CLI arg.
 #[derive(Debug)]
 struct SecretKeyShareInput {
     input_index: usize,
@@ -88,6 +92,7 @@ impl std::str::FromStr for SecretKeyShareInput {
     }
 }
 
+/// For obtaining a DBC and secret key shares from the user via CLI arg.
 #[derive(Debug)]
 struct DbcSecretKeyShareInput {
     dbc: DbcUnblinded,
@@ -204,6 +209,7 @@ enum Command {
     },
 }
 
+/// All available cli arguments
 #[derive(Debug, StructOpt)]
 #[structopt(global_settings(&[structopt::clap::AppSettings::ColoredHelp]))]
 struct CliArgs {
@@ -215,14 +221,14 @@ struct CliArgs {
 /// of 1 or more nodes.
 #[derive(sd::Serialize, sd::Deserialize, Debug)]
 struct MintInfo {
-    mintnodes: Vec<Mint>,
+    mintnodes: Vec<Mint<KeyManager>>,
     genesis: DbcUnblinded,
     poly: Poly,
 }
 
 impl MintInfo {
     // returns the first mint node.
-    fn mintnode(&self) -> Result<&Mint> {
+    fn mintnode(&self) -> Result<&Mint<KeyManager>> {
         self.mintnodes
             .get(0)
             .ok_or_else(|| anyhow!("Mint not yet created"))
@@ -374,12 +380,12 @@ fn newmint_cli(
         }
     };
 
-    let json = serde_json::json!({
+    let json = json::json!({
         "success": true,
         "msg": "Mint created",
     });
 
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    println!("{}", json::to_string_pretty(&json)?);
 
     Ok(mintinfo)
 }
@@ -392,12 +398,12 @@ fn newkey_cli(num_signers: usize) -> Result<()> {
     let sks_val = secret_key_set_to_json(&sks, &poly, false)?;
     let pks_val = public_key_set_to_json(&sks.public_keys())?;
 
-    let mut root = serde_json::Map::new();
+    let mut root = json::Map::new();
     root.insert("secret_key_set".to_string(), sks_val);
     root.insert("public_key_set".to_string(), pks_val);
 
     let json = jmap(root);
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    println!("{}", json::to_string_pretty(&json)?);
 
     Ok(())
 }
@@ -407,13 +413,13 @@ fn mintinfo_cli(mintinfo: &MintInfo) -> Result<()> {
     let sks_val = secret_key_set_to_json(&mintinfo.secret_key_set(), &mintinfo.poly, false)?;
     let pks_val = public_key_set_to_json(&mintinfo.secret_key_set().public_keys())?;
 
-    let mut spendbook: Vec<serde_json::Value> = Default::default();
+    let mut spendbook: Vec<json::Value> = Default::default();
 
     for (dbchash, _tx) in mintinfo.mintnode()?.spendbook.transactions.iter() {
         spendbook.push(jstr(encode(&dbchash)));
     }
 
-    let mut root = serde_json::Map::new();
+    let mut root = json::Map::new();
     root.insert("mint_nodes".to_string(), jusize(mintinfo.mintnodes.len()));
     root.insert("secret_key_set".to_string(), sks_val);
     root.insert("public_key_set".to_string(), pks_val);
@@ -424,7 +430,7 @@ fn mintinfo_cli(mintinfo: &MintInfo) -> Result<()> {
     root.insert("spendbook".to_string(), jvec(spendbook));
 
     let json = jmap(root);
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    println!("{}", json::to_string_pretty(&json)?);
 
     Ok(())
 }
@@ -459,7 +465,7 @@ fn decode_cli(data_type: &str, data: &str) -> Result<()> {
         _ => jstr("Unknown type!".to_string()),
     };
 
-    println!("{}", serde_json::to_string_pretty(&jval)?);
+    println!("{}", json::to_string_pretty(&jval)?);
 
     Ok(())
 }
@@ -467,7 +473,7 @@ fn decode_cli(data_type: &str, data: &str) -> Result<()> {
 /// Implements validate command.  Validates signatures and that a
 /// DBC has not been double-spent.  Also checks if spent/unspent.
 fn validate_cli(mintinfo: &MintInfo, dbc: &DbcUnblinded) -> Result<()> {
-    let (status, desc) = match dbc.inner.confirm_valid(mintinfo.mintnode()?.key_cache()) {
+    let (status, desc) = match dbc.inner.confirm_valid(mintinfo.mintnode()?.key_manager()) {
         Ok(_) => match mintinfo.mintnode()?.is_spent(dbc.inner.name()) {
             true => ("spent", "valid but has already been spent".to_string()),
             false => ("spendable", "valid and has not been spent".to_string()),
@@ -475,12 +481,12 @@ fn validate_cli(mintinfo: &MintInfo, dbc: &DbcUnblinded) -> Result<()> {
         Err(e) => ("invalid", e.to_string()),
     };
 
-    let json = serde_json::json!({
+    let json = json::json!({
         "status": status,
         "desc": desc,
     });
 
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    println!("{}", json::to_string_pretty(&json)?);
 
     Ok(())
 }
@@ -530,12 +536,12 @@ fn prepare_tx_cli(inputs_cli: &[DbcUnblinded], outputs_cli: &[DbcOutput]) -> Res
         outputs_owners,
     };
 
-    let json = serde_json::json!({
+    let json = json::json!({
         "data_type": "ReissueTransaction",
         "data": to_be_hex(&transaction)?,
     });
 
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    println!("{}", json::to_string_pretty(&json)?);
 
     Ok(())
 }
@@ -583,12 +589,12 @@ fn sign_tx_cli(
         sig_shares.0.insert(dbc.name(), sigs);
     }
 
-    let json = serde_json::json!({
+    let json = json::json!({
         "data_type": "SignatureSharesMap",
         "data": to_be_hex(&sig_shares)?,
     });
 
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    println!("{}", json::to_string_pretty(&json)?);
 
     Ok(())
 }
@@ -667,12 +673,12 @@ fn prepare_reissue_cli(
         outputs_owners: tx.outputs_owners.clone(),
     };
 
-    let json = serde_json::json!({
+    let json = json::json!({
         "data_type": "ReissueRequest",
         "data": to_be_hex(&reissue_request)?,
     });
 
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    println!("{}", json::to_string_pretty(&json)?);
 
     Ok(())
 }
@@ -847,7 +853,7 @@ fn reissue_exec(
     // sort outputs by output_number
     output_dbcs.sort_by_key(|d| d.content.output_number);
 
-    let mut jdbcs: Vec<serde_json::Value> = Default::default();
+    let mut jdbcs: Vec<json::Value> = Default::default();
 
     // for each output, construct DbcUnblinded and display
     for dbc in output_dbcs.iter() {
@@ -862,11 +868,11 @@ fn reissue_exec(
         jdbcs.push(dbc_to_json(&dbc_owned, false)?);
     }
 
-    let json = serde_json::json!({
+    let json = json::json!({
         "desc": "List of output DBCs",
         "outputs": jdbcs,
     });
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    println!("{}", json::to_string_pretty(&json)?);
 
     Ok(())
 }
@@ -880,15 +886,17 @@ fn mk_new_random_mint(threshold: usize, amount: u64) -> Result<MintInfo> {
 /// creates a new mint from an existing SecretKeySet that was seeded by poly.
 fn mk_new_mint(secret_key_set: SecretKeySet, poly: Poly, amount: u64) -> Result<MintInfo> {
     let genesis_pubkey = secret_key_set.public_keys().public_key();
-    let mut mints: Vec<Mint> = Default::default();
+    let mut mints: Vec<Mint<KeyManager>> = Default::default();
 
     // Generate each Mint node, and corresponding NodeSignature. (Index + SignatureShare)
     let mut genesis_set: Vec<(DbcContent, DbcTransaction, (PublicKeySet, NodeSignature))> =
         Default::default();
     for i in 0..secret_key_set.threshold() as u64 + 1 {
         let key_manager = KeyManager::new(
-            secret_key_set.public_keys().clone(),
-            (i, secret_key_set.secret_key_share(i).clone()),
+            Signer::new(
+                secret_key_set.public_keys().clone(),
+                (i, secret_key_set.secret_key_share(i).clone()),
+            ),
             genesis_pubkey,
         );
         let mut mint = Mint::new(key_manager);
@@ -998,13 +1006,9 @@ fn bincode_bytes_to_big_endian_bytes(mut bb: Vec<u8>) -> Vec<u8> {
     bb
 }
 
-/// Converts SecretKeySet to serde_json::Value
-fn secret_key_set_to_json(
-    sks: &SecretKeySet,
-    poly: &Poly,
-    show_pks: bool,
-) -> Result<serde_json::Value> {
-    let mut map = serde_json::Map::new();
+/// Converts SecretKeySet to json::Value
+fn secret_key_set_to_json(sks: &SecretKeySet, poly: &Poly, show_pks: bool) -> Result<json::Value> {
+    let mut map = json::Map::new();
 
     map.insert("poly".to_string(), jstr(to_be_hex(&poly)?));
     map.insert("threshold".to_string(), jusize(sks.threshold()));
@@ -1025,9 +1029,9 @@ fn secret_key_set_to_json(
     Ok(jmap(map))
 }
 
-// converts PublicKeySet to serde_json::Value
-fn public_key_set_to_json(pks: &PublicKeySet) -> Result<serde_json::Value> {
-    let mut map = serde_json::Map::new();
+// converts PublicKeySet to json::Value
+fn public_key_set_to_json(pks: &PublicKeySet) -> Result<json::Value> {
+    let mut map = json::Map::new();
 
     map.insert("public_key_set".to_string(), jstr(to_be_hex(&pks)?));
     map.insert("threshold".to_string(), jusize(pks.threshold()));
@@ -1041,9 +1045,9 @@ fn public_key_set_to_json(pks: &PublicKeySet) -> Result<serde_json::Value> {
     Ok(jmap(map))
 }
 
-// converts SecretKeySet to serde_json::Value representing list of SecretKeyShare
-fn secret_key_shares_to_json(sks: &SecretKeySet) -> Result<serde_json::Value> {
-    let mut sec_shares = serde_json::Map::new();
+// converts SecretKeySet to json::Value representing list of SecretKeyShare
+fn secret_key_shares_to_json(sks: &SecretKeySet) -> Result<json::Value> {
+    let mut sec_shares = json::Map::new();
 
     //println!("\n -- PublicKeyShares --");
     for i in (0..sks.threshold() + 5).into_iter() {
@@ -1055,9 +1059,9 @@ fn secret_key_shares_to_json(sks: &SecretKeySet) -> Result<serde_json::Value> {
     Ok(jmap(sec_shares))
 }
 
-// converts PublicKeySet to serde_json::Value representing list of PublicKeyShare
-fn public_key_shares_to_json(pks: &PublicKeySet) -> Result<serde_json::Value> {
-    let mut pub_shares = serde_json::Map::new();
+// converts PublicKeySet to json::Value representing list of PublicKeyShare
+fn public_key_shares_to_json(pks: &PublicKeySet) -> Result<json::Value> {
+    let mut pub_shares = json::Map::new();
 
     //println!("\n -- PublicKeyShares --");
     for i in (0..pks.threshold() + 5).into_iter() {
@@ -1069,8 +1073,8 @@ fn public_key_shares_to_json(pks: &PublicKeySet) -> Result<serde_json::Value> {
     Ok(jmap(pub_shares))
 }
 
-/// encodes Dbc as serde_json::Value
-fn dbc_to_json(dbc: &DbcUnblinded, outputs: bool) -> Result<serde_json::Value> {
+/// encodes Dbc as json::Value
+fn dbc_to_json(dbc: &DbcUnblinded, outputs: bool) -> Result<json::Value> {
     // dbc.content.parents and dbc.transaction.inputs seem to be the same
     // so for now we are just displaying the latter.
     // println!("parents:");
@@ -1078,13 +1082,13 @@ fn dbc_to_json(dbc: &DbcUnblinded, outputs: bool) -> Result<serde_json::Value> {
     //     println!("  {}", encode(p))
     // }
 
-    let mut inputs = serde_json::Map::new();
+    let mut inputs = json::Map::new();
 
     for (i, input) in dbc.inner.transaction.inputs.iter().enumerate() {
         inputs.insert(i.to_string(), jstr(encode(input)));
     }
 
-    let mut root = serde_json::Map::new();
+    let mut root = json::Map::new();
 
     root.insert("id".to_string(), jstr(encode(dbc.inner.name())));
     root.insert("amount".to_string(), ju64(dbc.inner.content.amount));
@@ -1096,7 +1100,7 @@ fn dbc_to_json(dbc: &DbcUnblinded, outputs: bool) -> Result<serde_json::Value> {
     root.insert("inputs".to_string(), jmap(inputs));
 
     if outputs {
-        let mut outputs = serde_json::Map::new();
+        let mut outputs = json::Map::new();
         for (i, output) in dbc.inner.transaction.outputs.iter().enumerate() {
             outputs.insert(i.to_string(), jstr(encode(output)));
         }
@@ -1108,32 +1112,32 @@ fn dbc_to_json(dbc: &DbcUnblinded, outputs: bool) -> Result<serde_json::Value> {
     Ok(jmap(root))
 }
 
-// converts String to serde_json::Value
-fn jstr(s: String) -> serde_json::Value {
-    serde_json::Value::String(s)
+// converts String to json::Value
+fn jstr(s: String) -> json::Value {
+    json::Value::String(s)
 }
 
-// converts u64 to serde_json::Value
-fn ju64(n: u64) -> serde_json::Value {
-    serde_json::Value::Number(serde_json::Number::from(n))
+// converts u64 to json::Value
+fn ju64(n: u64) -> json::Value {
+    json::Value::Number(json::Number::from(n))
 }
 
-// converts u32 to serde_json::Value
-fn ju32(n: u32) -> serde_json::Value {
-    serde_json::Value::Number(serde_json::Number::from(n))
+// converts u32 to json::Value
+fn ju32(n: u32) -> json::Value {
+    json::Value::Number(json::Number::from(n))
 }
 
-// converts usize to serde_json::Value
-fn jusize(n: usize) -> serde_json::Value {
-    serde_json::Value::Number(serde_json::Number::from(n))
+// converts usize to json::Value
+fn jusize(n: usize) -> json::Value {
+    json::Value::Number(json::Number::from(n))
 }
 
-// converts Vec<serde_json::Value> to serde_json::Value
-fn jvec(v: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::Value::Array(v)
+// converts Vec<json::Value> to json::Value
+fn jvec(v: Vec<json::Value>) -> json::Value {
+    json::Value::Array(v)
 }
 
-// converts Map<String, serde_json::Value> to serde_json::Value
-fn jmap(m: serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
-    serde_json::Value::Object(m)
+// converts Map<String, json::Value> to json::Value
+fn jmap(m: json::Map<String, json::Value>) -> json::Value {
+    json::Value::Object(m)
 }
