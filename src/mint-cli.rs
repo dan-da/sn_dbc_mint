@@ -15,16 +15,14 @@ use serde_derive as sd;
 use serde_json as json;
 use sn_dbc::{
     Dbc, DbcContent, DbcTransaction, Hash, Mint, MintSignatures, NodeSignature, ReissueRequest,
-    ReissueTransaction, SimpleKeyManager as KeyManager, SimpleSigner as Signer,
+    ReissueTransaction, SimpleKeyManager as KeyManager, SimpleSigner as Signer, SimpleSpendBook as SpendBook,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::iter::FromIterator;
 use structopt::StructOpt;
-use threshold_crypto::poly::Poly;
-use threshold_crypto::serde_impl::SerdeSecret;
-use threshold_crypto::{
-    PublicKey, PublicKeySet, SecretKeySet, SecretKeyShare, Signature, SignatureShare,
-};
+use blsttc::poly::Poly;
+use blsttc::serde_impl::SerdeSecret;
+use blsttc::{PublicKey, PublicKeySet, SecretKeySet, SecretKeyShare, Signature, SignatureShare};
 
 use preferences_ron::{AppInfo, Preferences};
 
@@ -221,14 +219,14 @@ struct CliArgs {
 /// of 1 or more nodes.
 #[derive(sd::Serialize, sd::Deserialize, Debug)]
 struct MintInfo {
-    mintnodes: Vec<Mint<KeyManager>>,
+    mintnodes: Vec<Mint<KeyManager, SpendBook>>,
     genesis: DbcUnblinded,
     poly: Poly,
 }
 
 impl MintInfo {
     // returns the first mint node.
-    fn mintnode(&self) -> Result<&Mint<KeyManager>> {
+    fn mintnode(&self) -> Result<&Mint<KeyManager, SpendBook>> {
         self.mintnodes
             .get(0)
             .ok_or_else(|| anyhow!("Mint not yet created"))
@@ -415,7 +413,7 @@ fn mintinfo_cli(mintinfo: &MintInfo) -> Result<()> {
 
     let mut spendbook: Vec<json::Value> = Default::default();
 
-    for (dbchash, _tx) in mintinfo.mintnode()?.spendbook.transactions.iter() {
+    for (dbchash, _tx) in &mintinfo.mintnode()?.spendbook {
         spendbook.push(jstr(encode(&dbchash)));
     }
 
@@ -474,7 +472,7 @@ fn decode_cli(data_type: &str, data: &str) -> Result<()> {
 /// DBC has not been double-spent.  Also checks if spent/unspent.
 fn validate_cli(mintinfo: &MintInfo, dbc: &DbcUnblinded) -> Result<()> {
     let (status, desc) = match dbc.inner.confirm_valid(mintinfo.mintnode()?.key_manager()) {
-        Ok(_) => match mintinfo.mintnode()?.is_spent(dbc.inner.name()) {
+        Ok(_) => match mintinfo.mintnode()?.is_spent(dbc.inner.name())? {
             true => ("spent", "valid but has already been spent".to_string()),
             false => ("spendable", "valid and has not been spent".to_string()),
         },
@@ -886,7 +884,7 @@ fn mk_new_random_mint(threshold: usize, amount: u64) -> Result<MintInfo> {
 /// creates a new mint from an existing SecretKeySet that was seeded by poly.
 fn mk_new_mint(secret_key_set: SecretKeySet, poly: Poly, amount: u64) -> Result<MintInfo> {
     let genesis_pubkey = secret_key_set.public_keys().public_key();
-    let mut mints: Vec<Mint<KeyManager>> = Default::default();
+    let mut mints: Vec<Mint<KeyManager, SpendBook>> = Default::default();
 
     // Generate each Mint node, and corresponding NodeSignature. (Index + SignatureShare)
     let mut genesis_set: Vec<(DbcContent, DbcTransaction, (PublicKeySet, NodeSignature))> =
@@ -899,7 +897,7 @@ fn mk_new_mint(secret_key_set: SecretKeySet, poly: Poly, amount: u64) -> Result<
             ),
             genesis_pubkey,
         );
-        let mut mint = Mint::new(key_manager);
+        let mut mint = Mint::new(key_manager, SpendBook::new());
         genesis_set.push(mint.issue_genesis_dbc(amount)?);
         mints.push(mint);
     }
